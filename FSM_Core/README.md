@@ -16,7 +16,7 @@ FSM과 중앙 1ms one-shot timer를 제공합니다. 각 기능은 동일한 Cor
 - 동일 context의 실행 재진입 차단 및 거부 횟수 진단
 - 상태/전이 개수를 `sizeof`로 자동 계산하고 설정 배열 크기를 컴파일 시 검증
 - 초기화 시 설정된 개수 내에서 state/event 값과 callback을 검증
-- ISR과 태스크가 공유하는 timer 상태 보호
+- 지원되는 빌드 설정과 실행 조건에서 ISR/task 공유 timer 상태 보호
 
 ## 2. 기능 사양 요약
 
@@ -31,7 +31,7 @@ FSM과 중앙 1ms one-shot timer를 제공합니다. 각 기능은 동일한 Cor
 | 설정 방어 | 잘못된 state/event 범위와 NULL callback을 초기화 및 실행 시점에 차단합니다. |
 | 설정 배열 검증 | `FSM_DEFINE_CONFIG()` 사용 시 상태 배열 길이와 STATE_MAX의 일치, count 표현 범위를 컴파일 시 확인합니다. |
 | 중앙 timer | 기능별 ID의 1ms one-shot timer를 제공하며 만료 상태를 latch합니다. |
-| 동시성 보호 | ISR과 태스크가 공유할 수 있는 timer 다중 필드 접근을 임계구역으로 보호합니다. |
+| 동시성 보호 | MOBILGENE 설정에서 timer 공유 데이터 접근을 interrupt 차단으로 보호합니다. 적용 조건은 13절을 참고합니다. |
 
 ## 3. 파일 구성
 
@@ -54,8 +54,8 @@ FSM과 중앙 1ms one-shot timer를 제공합니다. 각 기능은 동일한 Cor
 | `Fsm_GetReentryRejectCount()` | 누적 재진입 거부 횟수를 지우지 않고 조회합니다. |
 | `FsmQueue_Init/Push/Pop()` | 고정 ring queue를 초기화하고 데이터를 등록·소비합니다. |
 | `FsmQueue_IsEmpty/IsFull()` | Queue 상태를 반환합니다. |
-| `FSM_Timer_Init()` | 중앙 timer table과 1ms time base를 초기화합니다. |
-| `FSM_Timer_Notification()` | 설정된 time base마다 모든 active timer를 갱신합니다. |
+| `FSM_Timer_Init()` | 중앙 timer table을 초기화하고 Notification 처리를 허용합니다. GPT는 시작하지 않습니다. |
+| `FSM_Timer_Notification()` | 외부에서 1ms마다 호출하며, 한 번 호출할 때 active timer를 한 tick 갱신합니다. |
 | `FSM_Timer_Start/Stop()` | 지정 ID의 one-shot timer를 시작하거나 중지합니다. |
 | `FSM_Timer_IsExpired()` | 만료 latch를 읽고 clear합니다. |
 
@@ -79,6 +79,20 @@ typedef struct
 
 동일한 설정 테이블은 공유할 수 있지만 각 FSM instance는 별도의
 `Fsm_ContextType`을 가져야 합니다.
+
+설정과 두 테이블은 사용하는 모든 context보다 오래 유지해야 합니다. 보통 파일
+범위의 `static const`로 선언하며, 실행 중 내용을 변경하면 안 됩니다.
+
+callback 인자는 모두 `void`이므로 Core는 실행 대상 context나 애플리케이션
+데이터를 callback에 전달하지 않습니다. 같은 설정을 공유한다고 해서 callback이
+각 instance를 자동으로 구분하는 것은 아닙니다. callback이 특정 전역 context에
+고정되어 있다면 두 번째 instance에서도 그 전역 데이터에 접근하게 됩니다.
+
+instance별 데이터가 필요하면 각 instance의 전용 wrapper callback과 테이블을
+만들어 해당 데이터에 명시적으로 연결합니다. 변경 가능한 애플리케이션 데이터를
+사용하지 않는 callback은 공유할 수 있습니다. 실행 대상을 전역 pointer 하나로
+교체하는 방식은 중첩된 다른 instance 실행에도 영향을 받으므로 사용하지 않는 것을
+권장합니다. context 인자 전달은 현재 Core API가 지원하지 않습니다.
 
 ### FSM runtime context
 
@@ -254,6 +268,11 @@ FSM_DEFINE_CONFIG(Example_Config,
 `doAction()`은 전이 내부에서 자동 호출되지 않으며 애플리케이션이 별도로
 `Fsm_Do()`를 호출할 때 실행됩니다.
 
+`currentState == nextState`인 자기 상태 전이도 guard가 허용하면
+`exit → action → state 대입 → entry` 전체를 실행합니다. entry에서 타이머를
+시작하거나 출력을 설정한다면 같은 상태로 전이할 때에도 그 동작이 반복됩니다.
+현재 Core에는 exit/entry를 생략하는 별도의 internal transition 기능이 없습니다.
+
 ### 소비되는 이벤트
 
 다음 경우에도 pop한 이벤트는 다시 큐로 돌아가지 않습니다.
@@ -287,8 +306,8 @@ guard에서 조건을 명확히 판단하는 방식을 권장합니다.
 
 ### 런타임 설정 검증
 
-`Fsm_Init()`은 설정이 유효할 때만 context를 초기화하고 초기 상태의 entry를
-호출합니다.
+`Fsm_Init()`은 설정이 유효하면 context를 활성화하고 초기 상태의 entry를
+호출합니다. 설정 검증 실패 시에는 아래 정책에 따라 context를 비활성화합니다.
 
 검증 항목:
 
@@ -324,6 +343,11 @@ callback을 실행하지 않습니다. 다시 사용하려면 유효한 설정�
 중앙 타이머와 하드웨어 출력, 애플리케이션 데이터 정리는 호출자가 수행해야 합니다.
 호출자는 반환값을 확인하고 애플리케이션의 오류 처리 정책을 적용해야 합니다.
 
+정상 재초기화도 기존 상태의 exit를 실행하지 않고 큐를 비운 뒤 초기 상태 entry를
+실행합니다. 기능 재시작이 필요하면 소유 task에서 기존 타이머/출력을 정리하고
+실행 중이 아닌 context에 대해 재초기화합니다. 일반적인 상태 변경은 이벤트 전이를
+사용하며, callback에서 동일 context를 재초기화하지 않습니다.
+
 ## 9. 이벤트 큐
 
 각 `Fsm_ContextType`은 독립된 FIFO ring queue를 포함합니다.
@@ -339,7 +363,7 @@ callback을 실행하지 않습니다. 다시 사용하려면 유효한 설정�
 
 - context가 NULL이 아님
 - FSM 초기화 완료
-- config가 유효함
+- config pointer가 NULL이 아님 (전체 설정 재검증은 초기화 시 수행)
 - `event < eventCount`
 - queue에 빈 공간이 있음
 
@@ -366,6 +390,20 @@ Std_ReturnType Example_Init(void)
     return Fsm_Init(&Example_Context.fsm, &Example_Config);
 }
 
+/* Called by the owning task while the FSM is idle. */
+void Example_Startup(void)
+{
+    if (Example_Init() != STD_OK)
+    {
+        Example_ApplySafeOutputs();
+        Example_ReportInitFailure();
+    }
+    else
+    {
+        /* Initialization succeeded; periodic processing may proceed. */
+    }
+}
+
 Std_ReturnType Example_RequestStart(void)
 {
     return Fsm_PostEvent(&Example_Context.fsm,
@@ -379,6 +417,11 @@ void Example_MainFunction10ms(void)
 }
 ```
 
+`Example_ApplySafeOutputs()`와 `Example_ReportInitFailure()`는 애플리케이션이
+구현할 안전 출력 설정과 오류 기록 함수의 예시입니다. 실제 제품 정책에 맞는
+함수로 연결합니다. 실패한 FSM의 주기 API는 callback을 실행하지 않으며, 기능을
+다시 사용하려면 오류 원인을 해결한 뒤 초기화 성공을 확인해야 합니다.
+
 한 주기에 이벤트를 하나만 처리하는 것이 기본 계약입니다. 여러 번 dispatch하면
 한 주기에 여러 상태를 연속 통과할 수 있으므로 timing과 callback 실행량이
 달라집니다.
@@ -387,21 +430,46 @@ void Example_MainFunction10ms(void)
 
 `fsm_timer`는 기능별 고정 ID를 사용하는 중앙 one-shot timer입니다.
 
+`FSM_Timer_Init()`은 timer table을 초기화하고 내부 Notification 처리를
+허용합니다. GPT 하드웨어 설정, interrupt 연결 또는 주기 시작은 수행하지 않습니다.
+시스템 초기화에서 timer manager를 초기화한 뒤, 플랫폼의 GPT 설정과 ISR 연결을
+통해 `FSM_Timer_Notification()`이 실제로 1ms마다 한 번 호출되도록 구성해야 합니다.
+시작 전 Notification은 무시되지만, 초기화 전에 Start한 timer는 Init에서 지워지므로
+`FSM_Timer_Start()`는 manager 초기화 이후에 사용합니다.
+
+호출 위치 예시이며 GPT 설정/시작 코드는 플랫폼에서 별도로 구현합니다.
+
 ```c
-FSM_Timer_Init();
-FSM_Timer_Notification();
-FSM_Timer_Start(timerId, ticks);
-FSM_Timer_Stop(timerId);
-FSM_Timer_IsExpired(timerId);
+void Example_TimerManagerInit(void)
+{
+    FSM_Timer_Init();
+}
+
+/* Connect this callback to exactly one 1 ms timer interrupt. */
+void Example_Gpt1msCallback(void)
+{
+    FSM_Timer_Notification();
+}
 ```
 
-현재 time base는 1ms입니다.
+다른 주기 함수에서도 Notification을 호출하면 tick이 중복되어 timer가 빨리
+만료됩니다. 호출 누락이나 interrupt 지연이 발생하면 실제 만료가 늦어집니다.
+Core는 실제 경과 시간을 측정하거나 누락된 tick을 자동 보정하지 않습니다.
+
+1ms 주기를 정확히 공급할 때의 명목 설정 시간은 다음과 같습니다.
 
 ```text
 ticks = 1     → 1ms
 ticks = 10    → 10ms
 ticks = 1000  → 1초
 ```
+
+timer는 Start 이후 들어오는 Notification을 N회 세어 만료됩니다. 시작 시점은
+tick 경계와 동기화되지 않으므로 이상적인 1ms 주기에서 실제 만료까지의 시간은
+대략 `(N - 1)ms ~ N ms`입니다. 예를 들어 1 tick은 다음 interrupt에서 만료하므로
+Start로부터 1ms가 지나기 전에 만료할 수 있습니다. 위 값은 최소 대기 시간의
+보장이 아니며, 실제 요구 시간에는 tick 위상, interrupt 지연/jitter와 주기 함수의
+만료 확인 지연, 큐 재시도 및 dispatch 대기 시간도 고려해야 합니다.
 
 `FSM_Timer_Start()`의 ticks가 0이거나 ID가 잘못되면 기존 timer 상태를 변경하지
 않습니다. Start는 같은 ID의 timer를 재시작하며 기존 counter와 expiration을
@@ -422,13 +490,53 @@ expired = TRUE;
 Timer는 FSM event queue에 이벤트를 자동으로 등록하지 않습니다. 각 기능의
 주기 함수가 만료를 확인하고 필요한 이벤트를 직접 등록해야 합니다.
 
+IsExpired로 만료를 소비한 뒤 큐가 가득 차면 해당 만료를 timer에서 다시 읽을 수
+없습니다. 애플리케이션 context에 pending 플래그를 보관하고, 이벤트 등록에
+성공했을 때만 해제해야 합니다.
+
 ```c
-if (FSM_Timer_IsExpired(FSM_TIMER_LED_RESET) == TRUE)
+/* LedApp_Context includes a zero-initialized uint8 resetTimeoutPending. */
+void LedApp_ForwardResetTimeout(void)
 {
-    (void)Fsm_PostEvent(&LedApp_Context.fsm,
-                        (Fsm_EventType)LED_EVENT_RESET_DONE);
+    if (FSM_Timer_IsExpired(FSM_TIMER_LED_RESET) == TRUE)
+    {
+        LedApp_Context.resetTimeoutPending = STD_TRUE;
+    }
+    else
+    {
+        /* No new expiration; preserve any pending notification. */
+    }
+
+    if (LedApp_Context.resetTimeoutPending == STD_TRUE)
+    {
+        if (Fsm_PostEvent(&LedApp_Context.fsm,
+                         (Fsm_EventType)LED_EVENT_RESET_DONE) == STD_OK)
+        {
+            LedApp_Context.resetTimeoutPending = STD_FALSE;
+        }
+        else
+        {
+            /* Retry on the next owning-task cycle; keep pending set. */
+        }
+    }
+    else
+    {
+        /* No expiration is waiting for queue acceptance. */
+    }
 }
 ```
+
+이 함수는 `Fsm_Dispatch()`와 같은 소유 task에서 주기적으로 호출합니다.
+pending 유지 중에도 dispatch를 계속하여 queue에 빈 공간을 만들어야 합니다.
+등록 성공은 queue에 수용되었다는 뜻이며, guard 거부와 미일치 이벤트 소비는
+7절의 계약을 따릅니다. pending은 Core 필드가 아닌 애플리케이션 소유 데이터입니다.
+
+이 예제는 하나의 one-shot 요청을 하나의 알림으로 변환합니다. pending 유지 중
+같은 ID를 재시작하면 여러 만료가 하나로 합쳐지므로, 보통 등록 성공 또는 명시적
+취소까지 재시작하지 않습니다. 취소/기능 재초기화로 기존 알림이 불필요해지면
+소유 task에서 `FSM_Timer_Stop()`과 pending 해제를 함께 수행합니다.
+FSM 재초기화는 timer와 pending을 자동으로 지우지 않습니다. 이미 queue에 등록된
+알림을 무효화해야 한다면 별도로 이벤트의 유효성을 판단하는 설계가 필요합니다.
 
 ## 12. Timer 범위
 
@@ -455,17 +563,38 @@ volatile boolean active;
 volatile boolean expired;
 ```
 
-Start/Stop/IsExpired의 다중 필드 접근과 read-clear 구간은 critical section으로
-보호합니다. 현재 MOBILGENE target 구현은 다음 API를 사용합니다.
+`volatile`은 접근을 생략하지 않도록 하지만 다중 필드 갱신이나 read-clear의
+배타성을 보장하지 않습니다. 현재 구현의 보호 여부는 빌드 설정에 따라 다릅니다.
+
+| 빌드 설정 | 실제 보호 동작 | 사용 조건 |
+|---|---|---|
+| `PRJ_MOBILGENE_ENABLE == 1U` | Init/Start/Stop/IsExpired에서 interrupt 차단/복원 | 아래 동일 코어 및 호출 문맥 조건 충족 |
+| 그 외 설정 | critical section 매크로가 빈 동작 | 모든 timer API와 Notification을 하나의 실행 문맥에서 직렬 실행할 때 사용 |
+
+MOBILGENE target 구현은 다음 API를 사용합니다.
 
 ```c
 SuspendAllInterrupts();
 ResumeAllInterrupts();
 ```
 
-전체 interrupt를 중단하므로 critical section 내부에서는 필드 몇 개만
-갱신하고 즉시 빠져나옵니다. 양산 프로젝트에서는 OS/BSW 설정이 제공한다면
-다음과 같은 module 전용 exclusive area로 교체하는 것이 권장됩니다.
+현재 보호 구조는 task 측 API와 1ms ISR이 같은 코어에서 실행되고, 사용한
+interrupt 차단이 해당 ISR을 실제로 막는 것을 전제로 합니다. Notification에는
+자체 critical section이 없으므로 하나의 재진입하지 않는 ISR만 호출해야 합니다.
+task 측 API도 서로 직렬화하고, OS API가 허용하는 호출 문맥에서 사용해야 합니다.
+다른 코어의 접근이나 NMI 등 차단 범위 밖의 접근은 이 구조로 보호되지 않습니다.
+
+Init은 전체 timer 배열을 순회하며 interrupt를 차단하므로 timer 수에 따른
+최대 차단 시간도 확인해야 합니다. Start/Stop/IsExpired의 보호 구간에서는 해당
+timer의 필드만 갱신합니다.
+
+MOBILGENE 외 설정에서 ISR/task 공유가 필요하면 먼저 플랫폼에 맞는 보호 함수를
+구현해야 합니다. 현재 저장소에는 해당 플랫폼 구현이나 자동 컴파일 차단이 없습니다.
+실행 중 플래그 `executing`은 FSM 재진입 방어용이며 timer 배타 보호를 대신하지 않습니다.
+
+양산 프로젝트에서는 OS/BSW 설정이 제공한다면 다음과 같은 module 전용 exclusive
+area로 교체할 수 있습니다. 아래 이름은 연결 예시이며 실제 생성/구현된 함수와
+보호 메커니즘을 프로젝트에 맞게 사용해야 합니다.
 
 ```c
 SchM_Enter_FsmTimer_EXCLUSIVE_AREA_0();

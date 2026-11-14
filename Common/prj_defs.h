@@ -57,7 +57,7 @@
  * The build system may override this default definition.
  */
 #ifndef PRJ_MOBILGENE_ENABLE
-#define PRJ_MOBILGENE_ENABLE (0U)
+#define PRJ_MOBILGENE_ENABLE (1U)
 #endif
 
 /**

@@ -30,6 +30,7 @@
 | 2025-03-10 000.01     DL      Creation
 | 2026-10-15 000.02     DL      Standardized C source documentation
 | 2026-11-14 000.03     DL      Added execution guard and reentry diagnostics
+| 2026-11-14 000.04     DL      Deactivate FSM after invalid initialization
 ********************************************************************************/
 
 /*******************************************************************************
@@ -104,7 +105,12 @@ Std_ReturnType Fsm_Init(Fsm_ContextType * const context,
         }
         else
         {
-            /* Invalid configuration leaves existing FSM data unchanged. */
+            /* Fail closed without invoking callbacks from the old config. */
+            context->initialized = STD_FALSE;
+            context->config = NULL_PTR;
+            context->state = (Fsm_StateType)0U;
+            context->lastEvent = (Fsm_EventType)0U;
+            FsmQueue_Init(&context->eventQueue);
         }
 
         context->executing = STD_FALSE;

@@ -168,10 +168,15 @@ static void Test_DoAction(void)
     Test_ProbeReentry(TEST_PHASE_DO);
 }
 
+static void Test_ActiveExit(void)
+{
+    Test_CallbackCount++;
+}
+
 static const Fsm_StateOperationType Test_Operations[] =
 {
     { Test_InitialEntry, Test_Exit, Test_DoAction },
-    { Test_Entry, Test_NoAction, Test_DoAction }
+    { Test_Entry, Test_ActiveExit, Test_DoAction }
 };
 
 static const Fsm_TransitionType Test_Transitions[] =
@@ -267,6 +272,11 @@ static void Test_InvalidAndIdlePaths(void)
     invalidConfig.initialState = invalidConfig.stateCount;
     assert(Fsm_Init(&Test_Context, &invalidConfig) == STD_NOT_OK);
     assert(Test_Context.initialized == STD_FALSE);
+    assert(Test_Context.config == NULL_PTR);
+    assert(Test_Context.eventQueue.count == 0U);
+    assert(Test_Context.state == 0U);
+    assert(Test_Context.lastEvent == 0U);
+    assert(Fsm_GetReentryRejectCount(&Test_Context) == 0U);
     assert(Test_Context.executing == STD_FALSE);
     assert(Fsm_Init(&Test_Context, &Test_Config) == STD_OK);
     callbackCount = Test_CallbackCount;
@@ -299,10 +309,14 @@ static void Test_DiagnosticPersistenceAndSaturation(void)
     assert(Fsm_GetReentryRejectCount(&Test_Context) == 4U);
     assert(Fsm_PostEvent(&Test_Context, 2U) == STD_OK);
     assert(Fsm_Init(&Test_Context, NULL_PTR) == STD_NOT_OK);
-    assert(Test_Context.eventQueue.count == 1U);
-    assert(Test_Context.config == &Test_Config);
+    assert(Test_Context.eventQueue.count == 0U);
+    assert(Test_Context.config == NULL_PTR);
+    assert(Test_Context.initialized == STD_FALSE);
     assert(Test_Context.executing == STD_FALSE);
     assert(Fsm_GetReentryRejectCount(&Test_Context) == 4U);
+
+    assert(Fsm_Init(&Test_Context, &Test_Config) == STD_OK);
+    assert(Fsm_PostEvent(&Test_Context, 2U) == STD_OK);
 
     /* Inject a busy instance to exercise the diagnostic boundary cheaply. */
     Test_Context.executing = STD_TRUE;
@@ -321,6 +335,87 @@ static void Test_DiagnosticPersistenceAndSaturation(void)
     assert(Fsm_GetReentryRejectCount(&Test_Context) == (uint16)65535U);
 }
 
+static void Test_CheckInitFailure(const Fsm_ConfigType * const invalidConfig)
+{
+    unsigned int callbackCount;
+    uint8 index;
+
+    /* Start with a running FSM, queued work, and nonzero diagnostic history. */
+    Test_CallbackReentry(TEST_PHASE_ACTION);
+    assert(Test_Context.state == 1U);
+    assert(Test_Context.lastEvent == 2U);
+    assert(Fsm_PostEvent(&Test_Context, 1U) == STD_OK);
+    callbackCount = Test_CallbackCount;
+
+    assert(Fsm_Init(&Test_Context, invalidConfig) == STD_NOT_OK);
+    assert(Test_Context.initialized == STD_FALSE);
+    assert(Test_Context.config == NULL_PTR);
+    assert(Test_Context.state == 0U);
+    assert(Test_Context.lastEvent == 0U);
+    assert(Test_Context.eventQueue.head == 0U);
+    assert(Test_Context.eventQueue.tail == 0U);
+    assert(Test_Context.eventQueue.count == 0U);
+    for (index = 0U; index < FSM_QUEUE_LENGTH; index++)
+    {
+        assert(Test_Context.eventQueue.buffer[index] == 0U);
+    }
+    assert(Test_Context.executing == STD_FALSE);
+    assert(Fsm_GetReentryRejectCount(&Test_Context) == 4U);
+    assert(Test_CallbackCount == callbackCount);
+
+    assert(Fsm_PostEvent(&Test_Context, 0U) == STD_NOT_OK);
+    Fsm_Dispatch(&Test_Context);
+    Fsm_Do(&Test_Context);
+    assert(Fsm_GetState(&Test_Context) == 0U);
+    assert(Fsm_GetLastEvent(&Test_Context) == 0U);
+    assert(Test_CallbackCount == callbackCount);
+    assert(Test_Context.executing == STD_FALSE);
+    assert(Fsm_GetReentryRejectCount(&Test_Context) == 4U);
+
+    /* Recovery starts with an empty queue and preserves diagnostic history. */
+    assert(Fsm_Init(&Test_Context, &Test_Config) == STD_OK);
+    assert(Test_Context.initialized == STD_TRUE);
+    assert(Test_Context.config == &Test_Config);
+    assert(Test_Context.state == 0U);
+    assert(Test_Context.lastEvent == Test_Config.eventCount);
+    assert(Test_Context.eventQueue.count == 0U);
+    assert(Test_Context.executing == STD_FALSE);
+    assert(Test_CallbackCount == (callbackCount + 1U));
+    assert(Fsm_GetReentryRejectCount(&Test_Context) == 4U);
+    assert(Fsm_PostEvent(&Test_Context, 0U) == STD_OK);
+    Test_Trace = 0U;
+    Fsm_Dispatch(&Test_Context);
+    assert(Test_Context.state == 1U);
+    assert(Test_Trace == 1234U);
+}
+
+static void Test_InitFailureDeactivation(void)
+{
+    Fsm_ConfigType invalidConfig = Test_Config;
+    Fsm_StateOperationType invalidOperations[2] =
+    {
+        { Test_InitialEntry, Test_Exit, Test_DoAction },
+        { Test_Entry, Test_NoAction, (Fsm_StateFuncType)0 }
+    };
+    Fsm_TransitionType invalidTransition =
+    {
+        0U, 0U, Test_Guard, Test_Action, 2U
+    };
+
+    Test_CheckInitFailure(NULL_PTR);
+    invalidConfig.initialState = invalidConfig.stateCount;
+    Test_CheckInitFailure(&invalidConfig);
+    invalidConfig = Test_Config;
+    invalidConfig.stateOperations = NULL_PTR;
+    Test_CheckInitFailure(&invalidConfig);
+    invalidConfig.stateOperations = invalidOperations;
+    Test_CheckInitFailure(&invalidConfig);
+    invalidConfig = Test_Config;
+    invalidConfig.transitionTable = &invalidTransition;
+    invalidConfig.transitionCount = 1U;
+    Test_CheckInitFailure(&invalidConfig);
+}
+
 int main(void)
 {
     Test_CallbackReentry(TEST_PHASE_INITIAL_ENTRY);
@@ -331,6 +426,8 @@ int main(void)
     Test_CallbackReentry(TEST_PHASE_DO);
     Test_InvalidAndIdlePaths();
     Test_DiagnosticPersistenceAndSaturation();
+    Test_InitFailureDeactivation();
     puts("PASS: all callback phases reject reentry; ownership, events, ordering, and diagnostics preserved");
+    puts("PASS: invalid initialization deactivates FSM, clears queued work, and permits recovery");
     return 0;
 }

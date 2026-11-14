@@ -32,6 +32,7 @@
 | 2026-10-15 000.02     DL      Standardized public header documentation
 | 2026-11-14 000.03     DL      Added execution guard and reentry diagnostics
 | 2026-11-14 000.04     DL      Added compile-time configuration size checks
+| 2026-11-14 000.05     DL      Documented initialization failure deactivation
 ********************************************************************************/
 #ifndef FSM_H
 #define FSM_H
@@ -158,8 +159,12 @@ typedef struct
  * \brief Initializes an FSM context and enters its configured initial state.
  *
  * Requires a zero-initialized context before first use. Rejects calls made
- * while Init, Dispatch, or Do is executing on this context. Reinitialization
- * preserves reentry diagnostics; invalid configuration preserves FSM data.
+ * while Init, Dispatch, or Do is executing on this context; reentry preserves
+ * the executing FSM and records a rejection. Otherwise, invalid configuration
+ * deactivates the context, clears its config pointer and queue, and resets state
+ * and lastEvent to zero. No exit callback or application cleanup is performed.
+ * Initialization attempts preserve reentry diagnostics. A deactivated context
+ * rejects events and executes no callbacks until successfully initialized.
  * \return STD_OK on success; otherwise STD_NOT_OK.
  */
 Std_ReturnType Fsm_Init(Fsm_ContextType * const context,

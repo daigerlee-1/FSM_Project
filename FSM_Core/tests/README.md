@@ -25,5 +25,12 @@ independent instance execution; rejection-count persistence and saturation;
 empty queues, blocked/unmatched events, invalid configuration, and null or
 zero-initialized contexts.
 
+Initialization-failure tests start from an active FSM with queued work and
+diagnostic history. NULL configuration, invalid initial state, missing state
+table, missing callback, and invalid transition must deactivate the FSM and
+clear its configuration and queue without callbacks. Posting/execution remain
+disabled until successful reinitialization; diagnostics survive both failure
+and recovery. Callback reentry remains a rejection that preserves the active FSM.
+
 These tests do not establish target ABI compatibility, MISRA/QAC compliance, or
 task/ISR synchronization. They intentionally test cooperative callback reentry.

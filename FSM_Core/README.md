@@ -1,0 +1,431 @@
+# FSM Core
+
+## 1. 개요
+
+FSM Core는 여러 애플리케이션 기능이 공유하는 이벤트 큐 기반 전이 테이블
+FSM과 중앙 1ms one-shot timer를 제공합니다. 각 기능은 동일한 Core API를
+사용하지만 상태, 이벤트, 전이 테이블, callback 및 runtime context는 독립적으로
+소유합니다.
+
+설계 목표는 다음과 같습니다.
+
+- 정적 메모리만 사용하는 결정론적 실행
+- 상태와 이벤트를 애플리케이션별 enum으로 관리
+- 전이 조건과 실제 동작을 guard/action으로 분리
+- entry/exit/do callback 제공
+- 전이 개수를 `sizeof`로 자동 계산
+- 잘못된 설정과 배열 범위 초과를 초기화 단계에서 차단
+- ISR과 태스크가 공유하는 timer 상태 보호
+
+## 2. 기능 사양 요약
+
+| 기능 | 기능 동작 |
+|---|---|
+| FSM 초기화 | 상태·이벤트 범위와 모든 callback을 검증한 뒤 초기 상태 entry를 실행합니다. |
+| 이벤트 등록 | FSM별 고정 길이 FIFO에 이벤트를 저장하고 overflow 시 `STD_NOT_OK`를 반환합니다. |
+| 이벤트 dispatch | 한 번 호출할 때 이벤트를 최대 한 개 소비하고 첫 번째 일치 전이를 처리합니다. |
+| 상태 전이 | Guard가 허용하면 `exit → action → state 변경 → entry` 순서로 실행합니다. |
+| 주기 동작 | `Fsm_Do()` 호출 시 현재 상태의 `doAction`을 한 번 실행합니다. |
+| 설정 방어 | 잘못된 state/event 범위와 NULL callback을 초기화 및 실행 시점에 차단합니다. |
+| 중앙 timer | 기능별 ID의 1ms one-shot timer를 제공하며 만료 상태를 latch합니다. |
+| 동시성 보호 | ISR과 태스크가 공유할 수 있는 timer 다중 필드 접근을 임계구역으로 보호합니다. |
+
+## 3. 파일 구성
+
+| 파일 | 역할 |
+|---|---|
+| `fsm.c/.h` | FSM 초기화, 이벤트 등록, 전이 dispatch 및 do 실행 |
+| `fsm_queue.c/.h` | FSM instance별 고정 크기 FIFO ring queue |
+| `fsm_timer.c/.h` | 기능별 ID를 사용하는 중앙 1ms one-shot timer |
+
+### 공개 API
+
+| API | 기능 |
+|---|---|
+| `Fsm_Init()` | 설정 검증 후 context와 초기 상태를 초기화합니다. |
+| `Fsm_PostEvent()` | 유효한 이벤트를 instance FIFO에 등록합니다. |
+| `Fsm_Dispatch()` | FIFO에서 이벤트를 최대 한 개 꺼내 전이를 처리합니다. |
+| `Fsm_Do()` | 현재 상태의 `doAction`을 실행합니다. |
+| `Fsm_GetState()` | Authoritative FSM state를 반환합니다. |
+| `Fsm_GetLastEvent()` | 마지막으로 소비한 event 또는 sentinel을 반환합니다. |
+| `FsmQueue_Init/Push/Pop()` | 고정 ring queue를 초기화하고 데이터를 등록·소비합니다. |
+| `FsmQueue_IsEmpty/IsFull()` | Queue 상태를 반환합니다. |
+| `FSM_Timer_Init()` | 중앙 timer table과 1ms time base를 초기화합니다. |
+| `FSM_Timer_Notification()` | 설정된 time base마다 모든 active timer를 갱신합니다. |
+| `FSM_Timer_Start/Stop()` | 지정 ID의 one-shot timer를 시작하거나 중지합니다. |
+| `FSM_Timer_IsExpired()` | 만료 latch를 읽고 clear합니다. |
+
+## 4. 핵심 구조
+
+### FSM 설정
+
+`Fsm_ConfigType`은 변경되지 않는 정적 설정입니다.
+
+```c
+typedef struct
+{
+    Fsm_StateType initialState;
+    Fsm_StateType stateCount;
+    Fsm_EventType eventCount;
+    const Fsm_StateOperationType *stateOperations;
+    const Fsm_TransitionType *transitionTable;
+    uint16 transitionCount;
+} Fsm_ConfigType;
+```
+
+동일한 설정 테이블은 공유할 수 있지만 각 FSM instance는 별도의
+`Fsm_ContextType`을 가져야 합니다.
+
+### FSM runtime context
+
+```c
+typedef struct
+{
+    Fsm_StateType state;
+    Fsm_EventType lastEvent;
+    const Fsm_ConfigType *config;
+    FsmQueue_ContextType eventQueue;
+    uint8 initialized;
+} Fsm_ContextType;
+```
+
+`state`는 실제 FSM 상태의 기준값입니다. 애플리케이션 context의 별도 typed
+state는 주기적으로 동기화되는 관찰용 mirror일 수 있으므로 상태 판단에는
+`Fsm_GetState()` 또는 `fsm.state`를 사용합니다.
+
+## 5. 상태 callback
+
+각 상태는 다음 세 callback을 반드시 가져야 합니다.
+
+```c
+typedef struct
+{
+    Fsm_StateFuncType entry;
+    Fsm_StateFuncType exit;
+    Fsm_StateFuncType doAction;
+} Fsm_StateOperationType;
+```
+
+| Callback | 실행 시점 |
+|---|---|
+| `entry` | 초기 상태 진입 또는 전이 완료 후 한 번 |
+| `exit` | 현재 상태를 떠나기 직전에 한 번 |
+| `doAction` | `Fsm_Do()`가 호출될 때마다 한 번 |
+
+동작이 필요하지 않은 callback도 NULL로 두면 안 됩니다. 모듈별
+`EntryNoAction`, `ExitNoAction`, `DoNoAction` 함수를 지정해야 합니다.
+
+## 6. 전이 테이블
+
+전이 한 행은 다음 정보를 가집니다.
+
+```c
+typedef struct
+{
+    Fsm_StateType currentState;
+    Fsm_EventType event;
+    Fsm_GuardFuncType guard;
+    Fsm_ActionFuncType action;
+    Fsm_StateType nextState;
+} Fsm_TransitionType;
+```
+
+권장 선언 형식:
+
+```c
+static const Fsm_TransitionType Example_Transitions[] =
+{
+    { (Fsm_StateType)EXAMPLE_STATE_IDLE,
+      (Fsm_EventType)EXAMPLE_EVENT_START,
+      Example_GuardAlways,
+      Example_ActionStart,
+      (Fsm_StateType)EXAMPLE_STATE_ACTIVE }
+};
+
+#define EXAMPLE_TRANSITION_COUNT                              \
+    ((uint16)(sizeof(Example_Transitions) /                   \
+              sizeof(Example_Transitions[0])))
+```
+
+상태와 이벤트 enum을 generic `uint16` 필드에 넣을 때 명시적 cast를 사용합니다.
+전이 개수는 수동 상수가 아니라 배열의 `sizeof`로 계산합니다.
+
+## 7. 이벤트 처리 순서
+
+`Fsm_Dispatch()`는 호출할 때마다 큐에서 이벤트를 최대 한 개만 꺼냅니다.
+큐가 비어 있으면 아무 callback도 실행하지 않습니다.
+
+전이가 허용되면 실행 순서는 다음과 같습니다.
+
+```text
+1. event queue에서 이벤트 하나 pop
+2. transition table을 처음부터 검색
+3. currentState와 event가 일치하는 첫 행 선택
+4. guard() 실행
+5. 현재 상태 exit()
+6. transition action()
+7. context->state = nextState
+8. 새 상태 entry()
+```
+
+따라서 다음 예에서는 실행 순서가 `Exit → Action → Entry`입니다.
+
+```c
+{ LED_STATE_OFF, LED_EVENT_POWER_ON,
+  LedApp_GuardAlways, LedApp_ActionStart, LED_STATE_ON }
+```
+
+`doAction()`은 전이 내부에서 자동 호출되지 않으며 애플리케이션이 별도로
+`Fsm_Do()`를 호출할 때 실행됩니다.
+
+### 소비되는 이벤트
+
+다음 경우에도 pop한 이벤트는 다시 큐로 돌아가지 않습니다.
+
+- 현재 상태와 일치하는 전이 행이 없음
+- guard가 `STD_FALSE` 반환
+- dispatch 시점의 방어적 runtime 검증 실패
+
+동일한 state/event 조합을 여러 행에 선언하면 첫 번째 일치 행만 검사합니다.
+첫 guard가 실패해도 뒤의 중복 행은 검사하지 않으므로 중복 전이보다는 하나의
+guard에서 조건을 명확히 판단하는 방식을 권장합니다.
+
+## 8. 초기화 및 설정 검증
+
+`Fsm_Init()`은 설정이 유효할 때만 context를 초기화하고 초기 상태의 entry를
+호출합니다.
+
+검증 항목:
+
+- config와 table pointer가 NULL이 아님
+- `stateCount`, `eventCount`, `transitionCount`가 0보다 큼
+- `initialState < stateCount`
+- 모든 상태의 entry/exit/do callback이 NULL이 아님
+- 모든 전이의 current/next state가 범위 안에 있음
+- 모든 전이 event가 범위 안에 있음
+- 모든 guard/action callback이 NULL이 아님
+
+초기화 직후 `lastEvent`에는 유효 이벤트가 아닌 `eventCount` sentinel이
+저장됩니다.
+
+## 9. 이벤트 큐
+
+각 `Fsm_ContextType`은 독립된 FIFO ring queue를 포함합니다.
+
+| 항목 | 값 |
+|---|---:|
+| Queue 길이 | 16 events |
+| Element 타입 | `uint16` |
+| 메모리 방식 | context 내부 고정 배열 |
+| Overflow 동작 | 새 이벤트 거부, `STD_NOT_OK` 반환 |
+
+`Fsm_PostEvent()`는 다음 조건을 확인합니다.
+
+- context가 NULL이 아님
+- FSM 초기화 완료
+- config가 유효함
+- `event < eventCount`
+- queue에 빈 공간이 있음
+
+이벤트 생산 속도가 `Fsm_Dispatch()` 처리 속도보다 빠르면 queue가 가득 찰 수
+있습니다. 호출자는 `STD_NOT_OK`를 확인하고 재시도 또는 overflow 진단
+카운터 정책을 구현해야 합니다.
+
+### Queue 동시성
+
+`fsm_queue` 자체에는 `volatile`이나 critical section이 없습니다. 동일한 FSM
+queue의 Push/Pop이 하나의 cooperative task에서 실행될 때 사용해야 합니다.
+
+ISR에서 직접 `Fsm_PostEvent()`를 호출하면 안 됩니다. ISR 입력은 Wheel 모듈과
+같이 별도의 ISR-safe FIFO/flag에 저장하고, task context에서 FSM 이벤트로
+변환하는 방식을 사용합니다. 선점 가능한 여러 태스크가 같은 FSM queue에
+접근해야 한다면 module 전용 SchM exclusive area가 필요합니다.
+
+## 10. 기본 사용 순서
+
+```c
+void Example_Init(void)
+{
+    (void)Fsm_Init(&Example_Context.fsm, &Example_Config);
+}
+
+Std_ReturnType Example_RequestStart(void)
+{
+    return Fsm_PostEvent(&Example_Context.fsm,
+                         (Fsm_EventType)EXAMPLE_EVENT_START);
+}
+
+void Example_MainFunction10ms(void)
+{
+    Fsm_Dispatch(&Example_Context.fsm);
+    Fsm_Do(&Example_Context.fsm);
+}
+```
+
+한 주기에 이벤트를 하나만 처리하는 것이 기본 계약입니다. 여러 번 dispatch하면
+한 주기에 여러 상태를 연속 통과할 수 있으므로 timing과 callback 실행량이
+달라집니다.
+
+## 11. 중앙 FSM Timer
+
+`fsm_timer`는 기능별 고정 ID를 사용하는 중앙 one-shot timer입니다.
+
+```c
+FSM_Timer_Init();
+FSM_Timer_Notification();
+FSM_Timer_Start(timerId, ticks);
+FSM_Timer_Stop(timerId);
+FSM_Timer_IsExpired(timerId);
+```
+
+현재 time base는 1ms입니다.
+
+```text
+ticks = 1     → 1ms
+ticks = 10    → 10ms
+ticks = 1000  → 1초
+```
+
+`FSM_Timer_Start()`의 ticks가 0이거나 ID가 잘못되면 기존 timer 상태를 변경하지
+않습니다. Start는 같은 ID의 timer를 재시작하며 기존 counter와 expiration을
+덮어씁니다.
+
+### 만료 처리
+
+counter가 0이 되면 다음 상태가 latch됩니다.
+
+```c
+active = FALSE;
+expired = TRUE;
+```
+
+`FSM_Timer_IsExpired()`는 만료 여부를 읽은 뒤 `expired`를 FALSE로 지웁니다.
+따라서 한 번의 만료는 한 번만 소비됩니다.
+
+Timer는 FSM event queue에 이벤트를 자동으로 등록하지 않습니다. 각 기능의
+주기 함수가 만료를 확인하고 필요한 이벤트를 직접 등록해야 합니다.
+
+```c
+if (FSM_Timer_IsExpired(FSM_TIMER_LED_RESET) == TRUE)
+{
+    (void)Fsm_PostEvent(&LedApp_Context.fsm,
+                        (Fsm_EventType)LED_EVENT_RESET_DONE);
+}
+```
+
+## 12. Timer 범위
+
+counter는 `uint32`이며 1ms 기준 최대 설정 시간은 다음과 같습니다.
+
+```text
+4,294,967,295ms
+= 4,294,967.295초
+= 약 71,582.8분
+= 약 1,193.0시간
+= 약 49.7일
+```
+
+5분은 `300000U` ticks로 설정할 수 있습니다.
+
+## 13. Timer 동시성
+
+Timer table은 GPT 1ms interrupt와 task API가 공유할 수 있으므로 각 member가
+`volatile`로 선언되어 있습니다.
+
+```c
+volatile uint32 counter;
+volatile boolean active;
+volatile boolean expired;
+```
+
+Start/Stop/IsExpired의 다중 필드 접근과 read-clear 구간은 critical section으로
+보호합니다. 현재 MOBILGENE target 구현은 다음 API를 사용합니다.
+
+```c
+SuspendAllInterrupts();
+ResumeAllInterrupts();
+```
+
+전체 interrupt를 중단하므로 critical section 내부에서는 필드 몇 개만
+갱신하고 즉시 빠져나옵니다. 양산 프로젝트에서는 OS/BSW 설정이 제공한다면
+다음과 같은 module 전용 exclusive area로 교체하는 것이 권장됩니다.
+
+```c
+SchM_Enter_FsmTimer_EXCLUSIVE_AREA_0();
+SchM_Exit_FsmTimer_EXCLUSIVE_AREA_0();
+```
+
+ISR에서 실행되는 `FSM_Timer_Notification()`과 task API의 우선순위 및 target의
+원자적 접근 크기를 고려하여 SchM 구현을 선택해야 합니다.
+
+## 14. Timer ID 관리
+
+`FSM_TimerIdType`은 기능별로 그룹화되어 있습니다.
+
+- Power management
+- Button input
+- LED control
+- CAN communication
+- NVM
+- Knob Wheel
+
+새 timer를 추가할 때는 해당 기능 그룹 안에 ID를 추가하고
+`FSM_TIMER_MAX`는 항상 마지막에 유지해야 합니다. Timer storage 크기는
+`FSM_TIMER_MAX`로 자동 결정됩니다.
+
+동일한 timer ID를 여러 기능이 동시에 사용하면 서로 Start/Stop 상태를
+덮어쓰므로 각 독립 timing 조건마다 전용 ID를 사용해야 합니다.
+
+## 15. 새 FSM 추가 절차
+
+1. 기능별 `StateType`과 마지막 `STATE_MAX` 정의
+2. 기능별 `EventType`과 마지막 `EVENT_MAX` 정의
+3. 기능 context에 `Fsm_ContextType fsm` 포함
+4. 모든 상태의 entry/exit/do callback 작성
+5. guard와 action callback 작성
+6. state operation table을 enum 순서대로 작성
+7. transition table 작성
+8. transition count를 `sizeof`로 계산
+9. `Fsm_ConfigType` 작성
+10. 초기화에서 `Fsm_Init()` 결과 확인
+11. request API에서 `Fsm_PostEvent()` 결과 반환 또는 확인
+12. 주기 함수에서 `Fsm_Dispatch()`와 `Fsm_Do()` 호출
+
+State operation table은 state enum 값으로 직접 인덱싱되므로 enum 순서와 배열
+순서가 반드시 일치해야 합니다.
+
+## 16. MISRA-C 및 유지보수 기준
+
+- enum에서 generic state/event 타입으로 변환할 때 명시적 cast 사용
+- unsigned 정수 상수에 대문자 `U` suffix 사용
+- 모든 switch에 `default` case 작성
+- callback pointer를 NULL로 두지 않음
+- state/event sentinel을 실제 상태나 이벤트로 사용하지 않음
+- transition count를 수동으로 관리하지 않음
+- 배열과 queue index를 범위 확인 후 사용
+- event queue overflow 반환값을 무시하지 않음
+- ISR에서는 긴 callback이나 FSM dispatch를 실행하지 않음
+- static storage만 사용하고 동적 메모리를 사용하지 않음
+
+## 부록: 테스트 및 Trace32 확인
+
+각 애플리케이션 context의 `fsm`에서 다음 항목을 확인합니다.
+
+```c
+fsm.state
+fsm.lastEvent
+fsm.initialized
+fsm.config
+fsm.eventQueue.buffer
+fsm.eventQueue.head
+fsm.eventQueue.tail
+fsm.eventQueue.count
+```
+
+`fsm.state`가 실제 상태이고 애플리케이션의 typed `state`는 주기 함수에서
+갱신되는 관찰용 mirror일 수 있습니다.
+
+Timer table `Fsm_Timer[]`는 `fsm_timer.c`의 static 변수입니다. debugger가
+static symbol을 표시하도록 ELF debug symbol을 유지해야 내부 counter,
+active, expired 값을 확인할 수 있습니다.
+

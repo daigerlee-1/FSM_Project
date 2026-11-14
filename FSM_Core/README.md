@@ -14,8 +14,8 @@ FSM과 중앙 1ms one-shot timer를 제공합니다. 각 기능은 동일한 Cor
 - 전이 조건과 실제 동작을 guard/action으로 분리
 - entry/exit/do callback 제공
 - 동일 context의 실행 재진입 차단 및 거부 횟수 진단
-- 전이 개수를 `sizeof`로 자동 계산
-- 잘못된 설정과 배열 범위 초과를 초기화 단계에서 차단
+- 상태/전이 개수를 `sizeof`로 자동 계산하고 설정 배열 크기를 컴파일 시 검증
+- 초기화 시 설정된 개수 내에서 state/event 값과 callback을 검증
 - ISR과 태스크가 공유하는 timer 상태 보호
 
 ## 2. 기능 사양 요약
@@ -29,6 +29,7 @@ FSM과 중앙 1ms one-shot timer를 제공합니다. 각 기능은 동일한 Cor
 | 주기 동작 | `Fsm_Do()` 호출 시 현재 상태의 `doAction`을 한 번 실행합니다. |
 | 재진입 방어 | Init/Dispatch/Do 실행 중 동일 context의 실행 요청을 거부하고 진단 횟수를 누적합니다. |
 | 설정 방어 | 잘못된 state/event 범위와 NULL callback을 초기화 및 실행 시점에 차단합니다. |
+| 설정 배열 검증 | `FSM_DEFINE_CONFIG()` 사용 시 상태 배열 길이와 STATE_MAX의 일치, count 표현 범위를 컴파일 시 확인합니다. |
 | 중앙 timer | 기능별 ID의 1ms one-shot timer를 제공하며 만료 상태를 latch합니다. |
 | 동시성 보호 | ISR과 태스크가 공유할 수 있는 timer 다중 필드 접근을 임계구역으로 보호합니다. |
 
@@ -175,6 +176,26 @@ typedef struct
 권장 선언 형식:
 
 ```c
+typedef enum
+{
+    EXAMPLE_STATE_IDLE = 0U,
+    EXAMPLE_STATE_ACTIVE,
+    EXAMPLE_STATE_MAX
+} Example_StateType;
+
+typedef enum
+{
+    EXAMPLE_EVENT_START = 0U,
+    EXAMPLE_EVENT_MAX
+} Example_EventType;
+
+/* Callbacks are implemented by the application. Use an inferred array size. */
+static const Fsm_StateOperationType Example_StateOperations[] =
+{
+    { Example_IdleEntry, Example_IdleExit, Example_IdleDo },
+    { Example_ActiveEntry, Example_ActiveExit, Example_ActiveDo }
+};
+
 static const Fsm_TransitionType Example_Transitions[] =
 {
     { (Fsm_StateType)EXAMPLE_STATE_IDLE,
@@ -184,13 +205,26 @@ static const Fsm_TransitionType Example_Transitions[] =
       (Fsm_StateType)EXAMPLE_STATE_ACTIVE }
 };
 
-#define EXAMPLE_TRANSITION_COUNT                              \
-    ((uint16)(sizeof(Example_Transitions) /                   \
-              sizeof(Example_Transitions[0])))
+FSM_DEFINE_CONFIG(Example_Config,
+                  EXAMPLE_STATE_IDLE,
+                  EXAMPLE_STATE_MAX,
+                  EXAMPLE_EVENT_MAX,
+                  Example_StateOperations,
+                  Example_Transitions);
 ```
 
 상태와 이벤트 enum을 generic `uint16` 필드에 넣을 때 명시적 cast를 사용합니다.
-전이 개수는 수동 상수가 아니라 배열의 `sizeof`로 계산합니다.
+설정 선언은 파일 범위에서 `FSM_DEFINE_CONFIG()`를 사용합니다. 이 매크로가
+`static const Fsm_ConfigType` 객체를 선언하고, 상태/전이 개수를 해당 배열의
+`sizeof`로 계산합니다. 별도의 수동 count와 배열 길이가 달라지는 것을 방지합니다.
+매크로에 전달하는 `STATE_MAX`, `EVENT_MAX`에는 미리 `uint16` cast를 적용하지
+않습니다. 범위를 검사하기 전에 cast하면 큰 값이 잘려 잘못된 설정을 놓칠 수 있습니다.
+
+배열은 정의가 보이는 완전한 배열이어야 하며 pointer나 함수의 배열 매개변수를
+전달하면 안 됩니다. 표준 C99의 `sizeof` 기반 검사는 배열과 pointer를 일반적으로
+구분하지 못하므로 이 호출 조건은 사용자가 지켜야 합니다. 상태 배열은 `[]`로
+크기를 추론하도록 선언하는 것을 권장합니다. `[STATE_MAX]`로 크기를 고정하면
+누락된 초기화 행도 배열 길이에 포함되며, NULL callback은 런타임 검증 대상입니다.
 
 ## 7. 이벤트 처리 순서
 
@@ -233,6 +267,25 @@ static const Fsm_TransitionType Example_Transitions[] =
 guard에서 조건을 명확히 판단하는 방식을 권장합니다.
 
 ## 8. 초기화 및 설정 검증
+
+### 컴파일 시 배열 크기 검증
+
+`FSM_DEFINE_CONFIG()`는 C99에서도 사용할 수 있는 typedef 배열 크기 검사로
+다음 조건을 확인합니다. 조건을 만족하지 않으면 음수 배열 크기로 컴파일이 실패합니다.
+
+- `STATE_MAX`가 1~65535이고 상태 배열의 원소 수와 같음
+- `EVENT_MAX`가 1~65535임
+- 전이 배열의 원소 수가 1~65535임 (`uint16` 변환 전에 검사)
+
+상태와 이벤트 enum은 0부터 연속된 값으로 정의하고 sentinel을 마지막에 둡니다.
+이 검사는 개수에 대한 검사이며 enum 값의 연속성, 상태 배열의 의미적 순서,
+각 전이 행의 값 및 callback 유효성까지 컴파일 시 검증하지는 않습니다.
+
+`Fsm_ConfigType`을 직접 초기화하는 기존 방식은 유지하지만, 이 경우에는 위
+컴파일 검사가 적용되지 않습니다. 런타임 API는 pointer에서 실제 배열 길이를
+복원할 수 없으므로 정확한 count와 배열 수명은 설정 작성자가 보장해야 합니다.
+
+### 런타임 설정 검증
 
 `Fsm_Init()`은 설정이 유효할 때만 context를 초기화하고 초기 상태의 entry를
 호출합니다.
@@ -433,8 +486,8 @@ ISR에서 실행되는 `FSM_Timer_Notification()`과 task API의 우선순위 �
 5. guard와 action callback 작성
 6. state operation table을 enum 순서대로 작성
 7. transition table 작성
-8. transition count를 `sizeof`로 계산
-9. `Fsm_ConfigType` 작성
+8. 상태 배열 길이와 STATE_MAX가 일치하도록 작성
+9. `FSM_DEFINE_CONFIG()`로 상태/전이 개수를 자동 계산하는 설정 선언
 10. 초기화에서 `Fsm_Init()` 결과 확인
 11. request API에서 `Fsm_PostEvent()` 결과 반환 또는 확인
 12. 주기 함수에서 `Fsm_Dispatch()`와 `Fsm_Do()` 호출
@@ -450,6 +503,7 @@ State operation table은 state enum 값으로 직접 인덱싱되므로 enum 순
 - callback pointer를 NULL로 두지 않음
 - state/event sentinel을 실제 상태나 이벤트로 사용하지 않음
 - transition count를 수동으로 관리하지 않음
+- `FSM_DEFINE_CONFIG()`에 완전한 배열과 cast하지 않은 count 상수를 전달함
 - 배열과 queue index를 범위 확인 후 사용
 - event queue overflow 반환값을 무시하지 않음
 - ISR에서는 긴 callback이나 FSM dispatch를 실행하지 않음

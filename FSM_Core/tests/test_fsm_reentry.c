@@ -4,6 +4,21 @@
 
 typedef enum
 {
+    TEST_STATE_IDLE = 0U,
+    TEST_STATE_ACTIVE,
+    TEST_STATE_MAX
+} Test_StateType;
+
+typedef enum
+{
+    TEST_EVENT_START = 0U,
+    TEST_EVENT_KEEP,
+    TEST_EVENT_UNMATCHED,
+    TEST_EVENT_MAX
+} Test_EventType;
+
+typedef enum
+{
     TEST_PHASE_NONE = 0,
     TEST_PHASE_INITIAL_ENTRY,
     TEST_PHASE_GUARD,
@@ -48,10 +63,8 @@ static const Fsm_TransitionType Test_OtherTransitions[] =
     { 0U, 0U, Test_Always, Test_NoAction, 0U }
 };
 
-static const Fsm_ConfigType Test_OtherConfig =
-{
-    0U, 1U, 1U, Test_OtherOperations, Test_OtherTransitions, 1U
-};
+FSM_DEFINE_CONFIG(Test_OtherConfig, 0U, 1U, 1U,
+                  Test_OtherOperations, Test_OtherTransitions);
 
 static void Test_AssertFsmDataUnchanged(const Fsm_ContextType * const before)
 {
@@ -167,10 +180,8 @@ static const Fsm_TransitionType Test_Transitions[] =
     { 1U, 1U, Test_Always, Test_NoAction, 1U }
 };
 
-static const Fsm_ConfigType Test_Config =
-{
-    0U, 2U, 3U, Test_Operations, Test_Transitions, 2U
-};
+FSM_DEFINE_CONFIG(Test_Config, TEST_STATE_IDLE, TEST_STATE_MAX, TEST_EVENT_MAX,
+                  Test_Operations, Test_Transitions);
 
 static void Test_Reset(void)
 {

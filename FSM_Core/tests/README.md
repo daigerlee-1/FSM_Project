@@ -11,6 +11,13 @@ after execution. `support/prj_typedefs.h` supplies host-only types because the
 target project header is not included in this repository. Keep this support
 directory out of production include paths.
 
+Compile-only tests exercise `FSM_DEFINE_CONFIG`: valid arrays, the 65535 count
+boundary, state arrays shorter/longer than STATE_MAX, 65536 transitions, and
+zero/overflowing state/event counts. Negative cases must fail with the expected
+named typedef assertion; an unrelated compiler error does not count as a pass.
+The boundary fixtures declare arrays with `extern` and use syntax-only compilation,
+so they allocate no large runtime buffers.
+
 Coverage includes same-context Init/Dispatch/Do rejection from initial entry,
 guard, exit, action, transition entry, and doAction; callback ordering; preservation
 of queued events and execution ownership; posting and querying from callbacks;

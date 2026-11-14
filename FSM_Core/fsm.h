@@ -31,6 +31,7 @@
 | 2025-03-10 000.01     DL      Creation
 | 2026-10-15 000.02     DL      Standardized public header documentation
 | 2026-11-14 000.03     DL      Added execution guard and reentry diagnostics
+| 2026-11-14 000.04     DL      Added compile-time configuration size checks
 ********************************************************************************/
 #ifndef FSM_H
 #define FSM_H
@@ -44,7 +45,41 @@
 /*******************************************************************************
     5. PUBLIC DEFINITIONS AND MACROS
 *******************************************************************************/
-/* No public definitions or macros are declared by this module. */
+/** Array length without narrowing; argument must be a complete array. */
+#define FSM_ARRAY_COUNT(array) (sizeof(array) / sizeof((array)[0]))
+
+/** C99 file-scope assertion: a false condition produces a negative array size. */
+#define FSM_CONFIG_STATIC_ASSERT(name, condition) \
+    typedef char name[(condition) ? 1 : -1]
+
+/**
+ * Declares a checked, static configuration at file scope.
+ * Supply complete arrays (never pointers), and uncast STATE_MAX/EVENT_MAX
+ * integer constants. State IDs must be contiguous starting at zero.
+ * Counts are checked before narrowing and are derived from the same arrays
+ * stored in the configuration. End the invocation with a semicolon.
+ * Runtime validation still checks initial state, rows, and callbacks.
+ */
+#define FSM_DEFINE_CONFIG(name, initialStateValue, stateCountValue, \
+                          eventCountValue, operationsArray, transitionsArray) \
+    FSM_CONFIG_STATIC_ASSERT(name##_StateCountRangeCheck, \
+        ((stateCountValue) > 0U) && ((stateCountValue) <= 65535U)); \
+    FSM_CONFIG_STATIC_ASSERT(name##_StateTableSizeCheck, \
+        FSM_ARRAY_COUNT(operationsArray) == (stateCountValue)); \
+    FSM_CONFIG_STATIC_ASSERT(name##_EventCountRangeCheck, \
+        ((eventCountValue) > 0U) && ((eventCountValue) <= 65535U)); \
+    FSM_CONFIG_STATIC_ASSERT(name##_TransitionCountRangeCheck, \
+        (FSM_ARRAY_COUNT(transitionsArray) > 0U) && \
+        (FSM_ARRAY_COUNT(transitionsArray) <= 65535U)); \
+    static const Fsm_ConfigType name = \
+    { \
+        (Fsm_StateType)(initialStateValue), \
+        (Fsm_StateType)FSM_ARRAY_COUNT(operationsArray), \
+        (Fsm_EventType)(eventCountValue), \
+        (operationsArray), \
+        (transitionsArray), \
+        (uint16)FSM_ARRAY_COUNT(transitionsArray) \
+    }
 
 /*******************************************************************************
     6. PUBLIC TYPEDEFS AND STRUCTURES
@@ -80,7 +115,11 @@ typedef struct
     Fsm_StateFuncType doAction; /**< Called by Fsm_Do while state is active. */
 } Fsm_StateOperationType;
 
-/** Constant configuration supplied by an application FSM module. */
+/**
+ * Constant configuration supplied by an application FSM module.
+ * Use FSM_DEFINE_CONFIG for compile-time array/count checks. Directly built
+ * configurations must supply correct lengths; Fsm_Init cannot discover them.
+ */
 typedef struct
 {
     Fsm_StateType initialState; /**< State selected during Fsm_Init. */

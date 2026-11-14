@@ -13,6 +13,7 @@ FSM과 중앙 1ms one-shot timer를 제공합니다. 각 기능은 동일한 Cor
 - 상태와 이벤트를 애플리케이션별 enum으로 관리
 - 전이 조건과 실제 동작을 guard/action으로 분리
 - entry/exit/do callback 제공
+- 동일 context의 실행 재진입 차단 및 거부 횟수 진단
 - 전이 개수를 `sizeof`로 자동 계산
 - 잘못된 설정과 배열 범위 초과를 초기화 단계에서 차단
 - ISR과 태스크가 공유하는 timer 상태 보호
@@ -26,6 +27,7 @@ FSM과 중앙 1ms one-shot timer를 제공합니다. 각 기능은 동일한 Cor
 | 이벤트 dispatch | 한 번 호출할 때 이벤트를 최대 한 개 소비하고 첫 번째 일치 전이를 처리합니다. |
 | 상태 전이 | Guard가 허용하면 `exit → action → state 변경 → entry` 순서로 실행합니다. |
 | 주기 동작 | `Fsm_Do()` 호출 시 현재 상태의 `doAction`을 한 번 실행합니다. |
+| 재진입 방어 | Init/Dispatch/Do 실행 중 동일 context의 실행 요청을 거부하고 진단 횟수를 누적합니다. |
 | 설정 방어 | 잘못된 state/event 범위와 NULL callback을 초기화 및 실행 시점에 차단합니다. |
 | 중앙 timer | 기능별 ID의 1ms one-shot timer를 제공하며 만료 상태를 latch합니다. |
 | 동시성 보호 | ISR과 태스크가 공유할 수 있는 timer 다중 필드 접근을 임계구역으로 보호합니다. |
@@ -48,6 +50,7 @@ FSM과 중앙 1ms one-shot timer를 제공합니다. 각 기능은 동일한 Cor
 | `Fsm_Do()` | 현재 상태의 `doAction`을 실행합니다. |
 | `Fsm_GetState()` | Authoritative FSM state를 반환합니다. |
 | `Fsm_GetLastEvent()` | 마지막으로 소비한 event 또는 sentinel을 반환합니다. |
+| `Fsm_GetReentryRejectCount()` | 누적 재진입 거부 횟수를 지우지 않고 조회합니다. |
 | `FsmQueue_Init/Push/Pop()` | 고정 ring queue를 초기화하고 데이터를 등록·소비합니다. |
 | `FsmQueue_IsEmpty/IsFull()` | Queue 상태를 반환합니다. |
 | `FSM_Timer_Init()` | 중앙 timer table과 1ms time base를 초기화합니다. |
@@ -86,12 +89,19 @@ typedef struct
     const Fsm_ConfigType *config;
     FsmQueue_ContextType eventQueue;
     uint8 initialized;
+    uint8 executing;
+    uint16 reentryRejectCount;
 } Fsm_ContextType;
 ```
 
 `state`는 실제 FSM 상태의 기준값입니다. 애플리케이션 context의 별도 typed
 state는 주기적으로 동기화되는 관찰용 mirror일 수 있으므로 상태 판단에는
 `Fsm_GetState()` 또는 `fsm.state`를 사용합니다.
+
+context는 최초 API 호출 전에 전체를 zero initialization해야 합니다. 정적 저장
+기간의 context 또는 `Fsm_ContextType context = {0};` 형태를 사용합니다.
+기능 context에 FSM context를 포함한 경우에도 동일한 초기화 조건이 적용됩니다.
+실행 중인 context를 직접 초기화하거나 복사하여 덮어쓰면 안 됩니다.
 
 ## 5. 상태 callback
 
@@ -114,6 +124,38 @@ typedef struct
 
 동작이 필요하지 않은 callback도 NULL로 두면 안 됩니다. 모듈별
 `EntryNoAction`, `ExitNoAction`, `DoNoAction` 함수를 지정해야 합니다.
+
+### Callback 호출 규칙과 재진입 방어
+
+`Fsm_Init()`, `Fsm_Dispatch()`, `Fsm_Do()`는 context별 `executing` 플래그를
+공유합니다. 각 API는 callback을 실행하기 전에 플래그를 설정하고 실행 종료 시
+해제합니다. 초기 상태 entry, guard, exit, action, 전이 후 entry, doAction 모두
+보호 범위에 포함됩니다.
+
+| Callback에서 호출하는 API | 동일 context에 대한 규칙 |
+|---|---|
+| `Fsm_Init()` | 금지. 재진입 시 `STD_NOT_OK`를 반환합니다. |
+| `Fsm_Dispatch()` | 금지. 재진입 시 이벤트를 소비하지 않고 반환합니다. |
+| `Fsm_Do()` | 금지. 재진입 시 callback을 실행하지 않고 반환합니다. |
+| `Fsm_PostEvent()` | 허용. 이벤트는 이후 dispatch에서 처리하며 등록 실패를 확인해야 합니다. |
+| `Fsm_GetState()`, `Fsm_GetLastEvent()` | 허용. 호출 시점에 저장된 값을 반환합니다. |
+| `Fsm_GetReentryRejectCount()` | 허용. 진단 횟수를 변경하지 않습니다. |
+
+guard/exit/action에서 상태를 조회하면 전이 전 상태이며, 전이 후 entry에서는
+새 상태입니다. 다른 context는 독립적으로 실행할 수 있지만, context 사이의
+callback 호출이 순환하여 이미 실행 중인 context로 돌아오면 해당 호출은 거부됩니다.
+
+재진입 거부 시 state, config, lastEvent, event queue와 실행 소유권은 유지되고,
+`reentryRejectCount`만 호출마다 1씩 증가합니다. 횟수는 65535에서 포화되어
+wrap되지 않습니다. 정상 재초기화와 잘못된 설정의 초기화 요청도 진단 횟수를
+지우지 않습니다. 진단은 최초 zero initialization 이후 계속 유지하며 별도
+clear API는 제공하지 않습니다. NULL context의 진단 조회는 0을 반환합니다.
+
+이 플래그는 하나의 cooperative 실행 문맥에서 발생하는 재귀 호출을 방어합니다.
+동일 context의 모든 API 접근은 소유 task에서 직렬화해야 합니다. task/ISR 간
+배타 보호 기능은 제공하지 않으며, 다중 task 사용 시에는 외부 보호가 필요합니다.
+callback에서 context 필드를 직접 변경하거나 내부 `eventQueue`를 직접 조작하지
+않고 공개 FSM API를 사용해야 합니다.
 
 ## 6. 전이 테이블
 
@@ -208,6 +250,11 @@ guard에서 조건을 명확히 판단하는 방식을 권장합니다.
 초기화 직후 `lastEvent`에는 유효 이벤트가 아닌 `eventCount` sentinel이
 저장됩니다.
 
+`Fsm_Init()`은 실행 중인 context에 대해서는 설정을 검사하거나 context/queue를
+초기화하기 전에 요청을 거부합니다. 실행 중이 아닌 context에 잘못된 설정이
+전달되면 기존 FSM 데이터와 진단 횟수를 유지하고 `STD_NOT_OK`를 반환합니다.
+호출자는 반환값을 확인하고 실패 시 애플리케이션의 오류 처리 정책을 적용해야 합니다.
+
 ## 9. 이벤트 큐
 
 각 `Fsm_ContextType`은 독립된 FIFO ring queue를 포함합니다.
@@ -244,9 +291,10 @@ ISR에서 직접 `Fsm_PostEvent()`를 호출하면 안 됩니다. ISR 입력은 
 ## 10. 기본 사용 순서
 
 ```c
-void Example_Init(void)
+/* Example_Context has static storage duration and is zero-initialized. */
+Std_ReturnType Example_Init(void)
 {
-    (void)Fsm_Init(&Example_Context.fsm, &Example_Config);
+    return Fsm_Init(&Example_Context.fsm, &Example_Config);
 }
 
 Std_ReturnType Example_RequestStart(void)
@@ -405,6 +453,8 @@ State operation table은 state enum 값으로 직접 인덱싱되므로 enum 순
 - 배열과 queue index를 범위 확인 후 사용
 - event queue overflow 반환값을 무시하지 않음
 - ISR에서는 긴 callback이나 FSM dispatch를 실행하지 않음
+- callback에서 동일 context의 Init/Dispatch/Do를 호출하지 않음
+- context는 최초 API 호출 전에 zero initialization하고 모든 접근을 직렬화함
 - static storage만 사용하고 동적 메모리를 사용하지 않음
 
 ## 부록: 테스트 및 Trace32 확인
@@ -415,6 +465,8 @@ State operation table은 state enum 값으로 직접 인덱싱되므로 enum 순
 fsm.state
 fsm.lastEvent
 fsm.initialized
+fsm.executing
+fsm.reentryRejectCount
 fsm.config
 fsm.eventQueue.buffer
 fsm.eventQueue.head
@@ -424,6 +476,12 @@ fsm.eventQueue.count
 
 `fsm.state`가 실제 상태이고 애플리케이션의 typed `state`는 주기 함수에서
 갱신되는 관찰용 mirror일 수 있습니다.
+
+`fsm.executing`은 Init/Dispatch/Do와 그 callback 실행 중에만 `STD_TRUE`입니다.
+`Fsm_GetReentryRejectCount(&context.fsm)` 또는 `fsm.reentryRejectCount`로
+재진입 호출 위반을 확인할 수 있습니다. 정상적인 사용에서는 횟수가 0으로 유지됩니다.
+
+호스트 회귀 테스트 실행 방법과 검증 범위는 `tests/README.md`를 참고합니다.
 
 Timer table `Fsm_Timer[]`는 `fsm_timer.c`의 static 변수입니다. debugger가
 static symbol을 표시하도록 ELF debug symbol을 유지해야 내부 counter,

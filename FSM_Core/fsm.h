@@ -30,6 +30,7 @@
 | ---------  ---        ------  ------------------------------------------------
 | 2025-03-10 000.01     DL      Creation
 | 2026-10-15 000.02     DL      Standardized public header documentation
+| 2026-11-14 000.03     DL      Added execution guard and reentry diagnostics
 ********************************************************************************/
 #ifndef FSM_H
 #define FSM_H
@@ -52,7 +53,11 @@
 typedef uint16 Fsm_StateType;
 typedef uint16 Fsm_EventType;
 
-/** Callback types used by transition tables and state operation tables. */
+/**
+ * Callback types used by transition tables and state operation tables.
+ * Callbacks may post events and query their context, but must not call Init,
+ * Dispatch, or Do on the same context or directly modify its internal data.
+ */
 typedef uint8 (*Fsm_GuardFuncType)(void);
 typedef void (*Fsm_ActionFuncType)(void);
 typedef void (*Fsm_StateFuncType)(void);
@@ -86,7 +91,11 @@ typedef struct
     uint16 transitionCount;     /**< Number of transition rows. */
 } Fsm_ConfigType;
 
-/** Mutable data belonging to one FSM instance. */
+/**
+ * Mutable data belonging to one FSM instance.
+ * Zero-initialize the complete context before its first API call. All access
+ * must be serialized by the owner; executing is not a task/ISR lock.
+ */
 typedef struct
 {
     Fsm_StateType state;              /**< Current authoritative FSM state. */
@@ -94,6 +103,8 @@ typedef struct
     const Fsm_ConfigType * config;    /**< Read-only configuration reference. */
     FsmQueue_ContextType eventQueue;  /**< Private event queue for this FSM. */
     uint8 initialized;                /**< STD_TRUE after successful init. */
+    uint8 executing;                  /**< Owned by Init, Dispatch, or Do. */
+    uint16 reentryRejectCount;         /**< Saturating lifetime reject count. */
 } Fsm_ContextType;
 
 /*******************************************************************************
@@ -106,6 +117,10 @@ typedef struct
 *******************************************************************************/
 /**
  * \brief Initializes an FSM context and enters its configured initial state.
+ *
+ * Requires a zero-initialized context before first use. Rejects calls made
+ * while Init, Dispatch, or Do is executing on this context. Reinitialization
+ * preserves reentry diagnostics; invalid configuration preserves FSM data.
  * \return STD_OK on success; otherwise STD_NOT_OK.
  */
 Std_ReturnType Fsm_Init(Fsm_ContextType * const context,
@@ -113,6 +128,8 @@ Std_ReturnType Fsm_Init(Fsm_ContextType * const context,
 
 /**
  * \brief Adds one validated event to an FSM instance queue.
+ *
+ * May be called from callbacks. The caller must handle queue overflow.
  * \return STD_OK when queued; otherwise STD_NOT_OK.
  */
 Std_ReturnType Fsm_PostEvent(Fsm_ContextType * const context,
@@ -122,10 +139,14 @@ Std_ReturnType Fsm_PostEvent(Fsm_ContextType * const context,
  * \brief Removes and processes at most one event from the instance queue.
  *
  * No callback is executed when the queue is empty or the context is invalid.
+ * Reentry on the same context is rejected before an event is consumed.
  */
 void Fsm_Dispatch(Fsm_ContextType * const context);
 
-/** \brief Executes the cyclic do callback of the current state. */
+/**
+ * \brief Executes the cyclic do callback of the current state.
+ * Reentry on the same context is rejected without executing a callback.
+ */
 void Fsm_Do(Fsm_ContextType * const context);
 
 /** \brief Returns the current state, or zero for an invalid context. */
@@ -133,5 +154,14 @@ Fsm_StateType Fsm_GetState(const Fsm_ContextType * const context);
 
 /** \brief Returns the last dequeued event, or zero for an invalid context. */
 Fsm_EventType Fsm_GetLastEvent(const Fsm_ContextType * const context);
+
+/**
+ * \brief Returns the number of rejected Init, Dispatch, and Do reentry calls.
+ *
+ * Saturates at 65535 and is preserved across Fsm_Init calls. May be queried
+ * from callbacks or before initialization on a zero-initialized context.
+ * Returns zero for NULL. This function does not clear the count.
+ */
+uint16 Fsm_GetReentryRejectCount(const Fsm_ContextType * const context);
 
 #endif /* FSM_H */

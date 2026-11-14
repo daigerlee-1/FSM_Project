@@ -29,6 +29,7 @@
 | ---------  ---        ------  ------------------------------------------------
 | 2025-03-10 000.01     DL      Creation
 | 2026-10-15 000.02     DL      Standardized C source documentation
+| 2026-11-14 000.03     DL      Added execution guard and reentry diagnostics
 ********************************************************************************/
 
 /*******************************************************************************
@@ -39,7 +40,8 @@
 /*******************************************************************************
     5. PRIVATE DEFINITIONS AND MACROS
 *******************************************************************************/
-/* No private definitions or macros are declared by this module. */
+/** Maximum retained reentry count; further rejections do not wrap it. */
+#define FSM_REENTRY_REJECT_COUNT_MAX ((uint16)65535U)
 
 /*******************************************************************************
     6. PRIVATE TYPEDEFS AND STRUCTURES
@@ -49,6 +51,12 @@
 /*******************************************************************************
     7. PRIVATE FUNCTION PROTOTYPES
 *******************************************************************************/
+/** \brief Acquires execution ownership or records a rejected reentry. */
+static uint8 Fsm_TryEnterExecution(Fsm_ContextType * const context);
+
+/** \brief Processes one event while the caller owns execution. */
+static void Fsm_DispatchInternal(Fsm_ContextType * const context);
+
 /** \brief Performs structural checks required before an FSM can run. */
 static uint8 Fsm_IsConfigValid(const Fsm_ConfigType * const config);
 
@@ -79,22 +87,31 @@ Std_ReturnType Fsm_Init(Fsm_ContextType * const context,
 {
     Std_ReturnType ret = STD_NOT_OK;
 
-    if ((context != NULL_PTR) && (Fsm_IsConfigValid(config) == STD_TRUE))
+    if (Fsm_TryEnterExecution(context) == STD_TRUE)
     {
-        /* eventCount is an out-of-range sentinel meaning "no event handled". */
-        context->config = config;
-        context->state = config->initialState;
-        context->lastEvent = config->eventCount;
-        context->initialized = STD_TRUE;
-        FsmQueue_Init(&context->eventQueue);
+        if (Fsm_IsConfigValid(config) == STD_TRUE)
+        {
+            /* eventCount is the sentinel meaning "no event handled". */
+            context->config = config;
+            context->state = config->initialState;
+            context->lastEvent = config->eventCount;
+            context->initialized = STD_TRUE;
+            FsmQueue_Init(&context->eventQueue);
 
-        /* Initialization follows the same entry semantics as a transition. */
-        config->stateOperations[context->state].entry();
-        ret = STD_OK;
+            /* Entry may post events, but cannot reenter FSM execution. */
+            config->stateOperations[context->state].entry();
+            ret = STD_OK;
+        }
+        else
+        {
+            /* Invalid configuration leaves existing FSM data unchanged. */
+        }
+
+        context->executing = STD_FALSE;
     }
     else
     {
-        /* Invalid configuration is reported to the owning application. */
+        /* Reject null contexts and reentry without modifying FSM data. */
     }
 
     return ret;
@@ -124,6 +141,133 @@ Std_ReturnType Fsm_PostEvent(Fsm_ContextType * const context,
 
 /** \brief Removes and processes at most one queued event. */
 void Fsm_Dispatch(Fsm_ContextType * const context)
+{
+    if (Fsm_TryEnterExecution(context) == STD_TRUE)
+    {
+        Fsm_DispatchInternal(context);
+        context->executing = STD_FALSE;
+    }
+    else
+    {
+        /* A rejected call must not consume an event or release ownership. */
+    }
+}
+
+/** \brief Executes the periodic operation of the active state. */
+void Fsm_Do(Fsm_ContextType * const context)
+{
+    if (Fsm_TryEnterExecution(context) == STD_TRUE)
+    {
+        if ((context->initialized == STD_TRUE) &&
+            (context->config != NULL_PTR) &&
+            (context->config->stateOperations != NULL_PTR) &&
+            (context->state < context->config->stateCount) &&
+            (context->config->stateOperations[context->state].doAction !=
+             (Fsm_StateFuncType)0))
+        {
+            context->config->stateOperations[context->state].doAction();
+        }
+        else
+        {
+            /* Ignore calls made before successful initialization. */
+        }
+
+        context->executing = STD_FALSE;
+    }
+    else
+    {
+        /* A rejected call must not execute a callback or release ownership. */
+    }
+}
+
+/** \brief Returns the current state of a valid FSM context. */
+Fsm_StateType Fsm_GetState(const Fsm_ContextType * const context)
+{
+    Fsm_StateType state = (Fsm_StateType)0U;
+
+    if ((context != NULL_PTR) && (context->initialized == STD_TRUE))
+    {
+        state = context->state;
+    }
+    else
+    {
+        /* Return the zero state for an invalid context. */
+    }
+
+    return state;
+}
+
+/** \brief Returns the most recently dequeued event. */
+Fsm_EventType Fsm_GetLastEvent(const Fsm_ContextType * const context)
+{
+    Fsm_EventType event = (Fsm_EventType)0U;
+
+    if ((context != NULL_PTR) && (context->initialized == STD_TRUE))
+    {
+        event = context->lastEvent;
+    }
+    else
+    {
+        /* Return zero for an invalid context. */
+    }
+
+    return event;
+}
+
+/** \brief Returns the retained, saturating reentry rejection count. */
+uint16 Fsm_GetReentryRejectCount(const Fsm_ContextType * const context)
+{
+    uint16 count = (uint16)0U;
+
+    if (context != NULL_PTR)
+    {
+        count = context->reentryRejectCount;
+    }
+    else
+    {
+        /* A null context has no diagnostics to report. */
+    }
+
+    return count;
+}
+
+/*******************************************************************************
+    11. PRIVATE FUNCTIONS
+*******************************************************************************/
+/** \brief Serializes callback-driven execution in one cooperative context. */
+static uint8 Fsm_TryEnterExecution(Fsm_ContextType * const context)
+{
+    uint8 ret = STD_FALSE;
+
+    if (context != NULL_PTR)
+    {
+        if (context->executing == STD_FALSE)
+        {
+            context->executing = STD_TRUE;
+            ret = STD_TRUE;
+        }
+        else
+        {
+            if (context->reentryRejectCount < FSM_REENTRY_REJECT_COUNT_MAX)
+            {
+                context->reentryRejectCount++;
+            }
+            else
+            {
+                /* Preserve saturation so repeated faults remain visible. */
+            }
+        }
+    }
+    else
+    {
+        /* A null context cannot acquire execution ownership. */
+    }
+
+    return ret;
+}
+
+/** \brief Removes and processes at most one event under execution ownership. */
+static void Fsm_DispatchInternal(Fsm_ContextType * const context)
 {
     FsmQueue_ValueType queuedEvent = (FsmQueue_ValueType)0U;
     uint16 index;
@@ -203,63 +347,6 @@ void Fsm_Dispatch(Fsm_ContextType * const context)
     }
 }
 
-/** \brief Executes the periodic operation of the active state. */
-void Fsm_Do(Fsm_ContextType * const context)
-{
-    if ((context != NULL_PTR) &&
-        (context->initialized == STD_TRUE) &&
-        (context->config != NULL_PTR) &&
-        (context->config->stateOperations != NULL_PTR) &&
-        (context->state < context->config->stateCount) &&
-        (context->config->stateOperations[context->state].doAction !=
-         (Fsm_StateFuncType)0))
-    {
-        /* doAction never performs table lookup or consumes an event. */
-        context->config->stateOperations[context->state].doAction();
-    }
-    else
-    {
-        /* Ignore calls made before successful initialization. */
-    }
-}
-
-/** \brief Returns the current state of a valid FSM context. */
-Fsm_StateType Fsm_GetState(const Fsm_ContextType * const context)
-{
-    Fsm_StateType state = (Fsm_StateType)0U;
-
-    if ((context != NULL_PTR) && (context->initialized == STD_TRUE))
-    {
-        state = context->state;
-    }
-    else
-    {
-        /* Return the zero state for an invalid context. */
-    }
-
-    return state;
-}
-
-/** \brief Returns the most recently dequeued event. */
-Fsm_EventType Fsm_GetLastEvent(const Fsm_ContextType * const context)
-{
-    Fsm_EventType event = (Fsm_EventType)0U;
-
-    if ((context != NULL_PTR) && (context->initialized == STD_TRUE))
-    {
-        event = context->lastEvent;
-    }
-    else
-    {
-        /* Return zero for an invalid context. */
-    }
-
-    return event;
-}
-
-/*******************************************************************************
-    11. PRIVATE FUNCTIONS
-*******************************************************************************/
 /**
  * \brief Validates the mandatory fields of a static FSM configuration.
  *

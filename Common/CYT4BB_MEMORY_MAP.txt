@@ -1,0 +1,118 @@
+CYT4BB MEMORY MAP
+=================
+
+Device family
+-------------
+TRAVEO T2G CYT3BB/CYT4BB, Arm Cortex-M7 single/dual core
+
+Reference
+---------
+Infineon CYT3BB/4BB Datasheet, document 002-26591 Rev. *L,
+2025-06-12, Figure 3 and Tables 7 through 12.
+
+The ranges below describe the CYT3BB/4BB family address map. Reserved and
+device-specific regions shall not be accessed unless the selected CYT4BB
+part number and linker configuration explicitly permit the access.
+
+32-bit address-space overview
+-----------------------------
+
+0xFFFF_FFFF  +-------------------------------------------------------+
+             | Arm System Space / CPU and debug registers            |
+0xE000_0000  +-------------------------------------------------------+
+             | Reserved                                              |
+0xA011_4000  +-------------------------------------------------------+
+             | CM7_1 DTCM alias, 16 KB                               |
+0xA011_0000  +-------------------------------------------------------+
+             | Reserved                                              |
+0xA010_4000  +-------------------------------------------------------+
+             | CM7_1 ITCM alias, 16 KB                               |
+0xA010_0000  +-------------------------------------------------------+
+             | Reserved                                              |
+0xA001_4000  +-------------------------------------------------------+
+             | CM7_0 DTCM alias, 16 KB                               |
+0xA001_0000  +-------------------------------------------------------+
+             | Reserved                                              |
+0xA000_4000  +-------------------------------------------------------+
+             | CM7_0 ITCM alias, 16 KB                               |
+0xA000_0000  +-------------------------------------------------------+
+             | Reserved                                              |
+0x6800_0000  +-------------------------------------------------------+
+             | SMIF XIP window, 128 MB                               |
+0x6000_0000  +-------------------------------------------------------+
+             | Reserved                                              |
+0x4400_0000  +-------------------------------------------------------+
+             | Peripheral interconnect (AHB/APB peripherals)         |
+0x4000_0000  +-------------------------------------------------------+
+             | Reserved                                              |
+0x280C_0000  +-------------------------------------------------------+
+             | SRAM1, 256 KB                                         |
+0x2808_0000  +-------------------------------------------------------+
+             | SRAM0, 512 KB total                                   |
+             | - 0x2800_0000--0x2800_07FF: 2 KB reserved            |
+             | - 0x2800_0800--0x2807_FFFF: 510 KB user SRAM         |
+0x2800_0000  +-------------------------------------------------------+
+             | Reserved                                              |
+0x2000_4000  +-------------------------------------------------------+
+             | CM7 local DTCM address, 16 KB                         |
+0x2000_0000  +-------------------------------------------------------+
+             | Reserved                                              |
+0x1780_8000  +-------------------------------------------------------+
+             | Alternate Flash Supervisory region, 32 KB             |
+0x1780_0000  +-------------------------------------------------------+
+             | Reserved                                              |
+0x1700_8000  +-------------------------------------------------------+
+             | Flash Supervisory region, 32 KB                       |
+0x1700_0000  +-------------------------------------------------------+
+             | Reserved                                              |
+0x1404_0000  +-------------------------------------------------------+
+             | Work Flash small sectors, 64 KB (128-byte sectors)    |
+0x1403_0000  +-------------------------------------------------------+
+             | Work Flash large sectors, 192 KB (2-KB sectors)       |
+0x1400_0000  +-------------------------------------------------------+
+             | Reserved                                              |
+0x1041_0000  +-------------------------------------------------------+
+             | Code Flash small sectors, 128 KB (8-KB sectors)       |
+0x103F_0000  +-------------------------------------------------------+
+             | Code Flash large sectors, 4032 KB (32-KB sectors)     |
+0x1000_0000  +-------------------------------------------------------+
+             | Reserved                                              |
+0x0101_0000  +-------------------------------------------------------+
+             | Secure ROM mirror, 64 KB                              |
+0x0100_0000  +-------------------------------------------------------+
+             | Reserved                                              |
+0x0001_0000  +-------------------------------------------------------+
+             | Secure ROM, 64 KB                                     |
+             | CM7 local ITCM 0x0000_0000--0x0000_3FFF overlaps it  |
+0x0000_0000  +-------------------------------------------------------+
+
+Flash summary
+-------------
+
+Code Flash : 4160 KB total
+             0x1000_0000--0x103E_FFFF: 4032 KB, 32-KB sectors
+             0x103F_0000--0x1040_FFFF:  128 KB,  8-KB sectors
+
+Work Flash : 256 KB total
+             0x1400_0000--0x1402_FFFF: 192 KB, 2-KB sectors
+             0x1403_0000--0x1403_FFFF:  64 KB, 128-byte sectors
+
+SRAM       : 768 KB total
+             SRAM0: 512 KB, first 2 KB reserved for internal use
+             SRAM1: 256 KB
+
+Project IVD layout in Code Flash
+--------------------------------
+
+0x1000_0000--0x1005_7FFF  Excluded from the current IVD calculation
+0x1005_8000--0x1005_88FF  IVD signature section 1, 0x900 bytes
+0x1005_8900--0x1005_8BFF  Excluded gap, 0x300 bytes
+0x1005_8C00--0x101F_7FFF  IVD signature section 2, 0x19F400 bytes
+0x101F_8000--0x1040_FFFF  Excluded from the current IVD calculation
+
+Total IVD input length: 0x19FD00 bytes (1,703,168 bytes)
+
+The current IVD end address, 0x101F_7FFF, is also the end of the first-half
+large-sector region in CYT3BB/4BB dual-bank Mapping A. If bank mode, remapping,
+bootloader allocation, linker sections, or the selected CYT4BB derivative is
+changed, review all IVD ranges before generating or validating a signature.

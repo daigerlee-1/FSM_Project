@@ -1,5 +1,73 @@
 # FSM Project
 
+## 브랜치 운영 규칙
+
+`main`을 모든 공통 코드와 플랫폼 구현의 원본으로 관리합니다. 전용 브랜치는
+main의 특정 커밋에서 반대 플랫폼 분기를 제거하여 생성하는 배포 스냅샷입니다.
+세 브랜치의 파일이나 커밋 해시는 같지 않으며, `PLATFORM_SOURCE.json`의
+`source_commit`이 같은 main 커밋을 가리키는 것을 동기화 기준으로 삼습니다.
+
+| 브랜치 | 유지할 코드 | 플랫폼 선택 |
+|---|---|---|
+| `main` | MOBILGENE와 PC 구현, 테스트, 추출 도구 모두 | `PRJ_MOBILGENE_ENABLE=1U/0U`로 선택 |
+| `prj_mobilgene_ccp` | MOBILGENE 구현과 공통 코드 | 선택 매크로 및 PC 분기 제거 |
+| `prj_test_ccp` | PC 구현과 공통 코드, 호스트 테스트 | 선택 매크로 및 MOBILGENE 분기 제거 |
+
+운영 절차:
+
+1. 기능 추가, 공통 버그 수정 및 플랫폼별 수정은 모두 main에서 수행합니다.
+2. 변경 내용을 검토하고 가능한 양쪽 환경의 검증을 수행한 뒤 main에 커밋합니다.
+3. 깨끗한 main에서 추출·동기화 도구를 실행하여 두 전용 브랜치에 새 커밋을 만듭니다.
+4. 전용 브랜치 검증 후 세 브랜치를 push합니다. 작업 종료 시 main으로 돌아옵니다.
+5. 전용 브랜치의 긴급 수정은 해당 변경만 main에 반영한 뒤 다시 생성합니다.
+   전용 브랜치 전체를 main에 병합하지 않습니다.
+
+Python 3, PowerShell 및 GCC가 필요합니다. 저장소 루트에서 실행합니다.
+
+```powershell
+py tools/test_export_platform.py
+& ./FSM_Core/tests/run_tests.ps1
+& ./Storage/tests/run_tests.ps1
+# 위 검증과 main 커밋을 완료하고 작업 트리가 깨끗한 상태에서 실행
+py tools/sync_platforms.py
+```
+
+동기화 도구는 main에서 두 스냅샷을 먼저 생성한 뒤 전용 브랜치의 추적 파일을
+갱신하고 각각 커밋합니다. 기존 커밋 이력을 보존하며 reset/강제 push를 사용하지
+않습니다. 로컬 두 브랜치가 있어야 하며, 원격 변경이 있으면 먼저 fetch하고
+변경 내용을 main에 반영해야 합니다. 도구는 push하지 않고 마지막에 main으로
+돌아옵니다. 충돌이나 오류가 발생하면 상태를 확인하여 해결한 뒤 재실행합니다.
+미커밋 변경은 거부하지만, 전용 브랜치에만 있는 커밋의 기능은 자동 병합하지
+않으므로 실행 전에 main 반영 여부를 반드시 검토합니다.
+
+단일 플랫폼을 별도 폴더로 검토하려면 아래처럼 추출합니다. 출력 경로는 저장소
+밖의 새 디렉터리여야 합니다.
+
+```powershell
+py tools/export_platform.py --platform mobilgene --output "$env:TEMP/fsm_mobilgene_snapshot"
+py tools/export_platform.py --platform pc --output "$env:TEMP/fsm_pc_snapshot"
+```
+
+추출 도구는 플랫폼 조건만 평가하고 차량/기능 선택, include guard 및 OS 선택
+조건은 보존합니다. 해석할 수 없는 플랫폼 표현식은 생성 실패로 처리합니다.
+MOBILGENE 스냅샷에서는 PC 테스트·RAM NvM 드라이버를 제외하고, PC 스냅샷에서는
+AUTOSAR SWC C 파일, 기존 NvM RAM 연계 및 RTE 전용 CAN 어댑터를 제외합니다.
+새 플랫폼 전용 파일을 추가하면 `tools/export_platform.py`의 제외 목록도 검토합니다.
+
+현재 검증 범위와 제한:
+
+- PC: FSM 회귀 테스트와 실제 Common 헤더/Core 구문 검사, RAM NvM 드라이버 및
+  NvmApp 연동 테스트를 지원합니다. RAM NvM은 실제 비동기 Flash를 모사하지 않습니다.
+- PC 전체 실행에는 누락된 task.h/task.c, drv_console과 CAN 서비스 대역 등이 필요합니다.
+  LED 대역의 완료 알림도 추가로 구성해야 합니다. 전용 브랜치 생성이 전체 앱 실행
+  가능함을 의미하지 않습니다.
+- MOBILGENE: 외부 생성 RTE/BSW/OS/MCAL 및 링커 설정이 필요하며 이 저장소만으로
+  타깃 전체 링크를 검증할 수 없습니다.
+- 각 모듈 WARNING은 기존 검토 이력입니다. 플랫폼 분기 제거는 기능 결함의 일괄
+  수정을 의미하지 않습니다. Storage의 standalone 구현 누락(STORAGE-W004)은
+  `drv_nvm_pc.c` 추가로 보완했으며 나머지 항목은 별도 조치 대상입니다.
+
+
 자동차 임베디드 C 환경에서 사용하는 이벤트 기반 FSM Core와 프로젝트 공통
 헤더를 관리하는 저장소입니다. 정적 메모리 기반의 전이 테이블, 인스턴스별 이벤트
 큐, 중앙 1ms one-shot timer를 제공합니다.
@@ -32,7 +100,7 @@ FSM_Project/
 ## 2. 빌드 환경 선택
 
 `PRJ_MOBILGENE_ENABLE`은 `Common/prj_defs.h`에서 기본값을 정의하며,
-컴파일 옵션으로 덮어쓸 수 있습니다. 현재 main 브랜치의 기본값은 `0U`입니다.
+컴파일 옵션으로 덮어쓸 수 있습니다. 현재 기본값은 `1U`입니다.
 
 | 설정 | 타입 정의 | 타이머 보호 | 용도 |
 |---|---|---|---|

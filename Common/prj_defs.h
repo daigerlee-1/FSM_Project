@@ -57,7 +57,7 @@
  * The build system may override this default definition.
  */
 #ifndef PRJ_MOBILGENE_ENABLE
-#define PRJ_MOBILGENE_ENABLE (0U)
+#define PRJ_MOBILGENE_ENABLE (1U)
 #endif
 
 /**
@@ -158,7 +158,9 @@
 #define I2C_SCB3_ENABLE (1U)
 #endif
 
-#define I2C_LED_TEST_ENABLE         (0U) /* option (0U), (1U) */
+#ifndef I2C_LED_TEST_ENABLE
+#define I2C_LED_TEST_ENABLE         (0U) 
+#endif
 
 /**
  * \brief Enables the runtime LED OTP test-write request when set to 1U.
@@ -236,6 +238,10 @@
 
 #if ((CCP_VERSION_10BYTE != 0U) && (CCP_VERSION_10BYTE != 1U))
     #error "CCP_VERSION_10BYTE must be 0U or 1U"
+#endif
+
+#if ((CCP_MASTERKEY_ENABLE != 0U) && (CCP_MASTERKEY_ENABLE != 1U))
+    #error "CCP_MASTERKEY_ENABLE must be 0U or 1U"
 #endif
 
 #if (VEHICLE_JX2_PRJ == 1U)

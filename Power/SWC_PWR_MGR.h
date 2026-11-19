@@ -39,21 +39,6 @@
 /*******************************************************************************
     5. PUBLIC DEFINITIONS AND MACROS
 *******************************************************************************/
-#if ((PRJ_MOBILGENE_ENABLE == 0U) && \
-     !defined(SWC_PWR_MGR_IMPLEMENTATION))
-
-    /* Map the public SWC interface to the standalone power implementation. */
-    #define SWC_PWR_MGR_NotifyCanRx             PowerApp_NotifyCanRx
-    #define SWC_PWR_MGR_NotifyHuPowerState      PowerApp_NotifyHuPowerState
-    #define SWC_PWR_MGR_RequestSafetyMode       PowerApp_RequestSafetyMode
-    #define SWC_PWR_MGR_IsOperational           PowerApp_IsOperational
-    #define SWC_PWR_MGR_IsAccOn                 PowerApp_IsAccOn
-    #define SWC_PWR_MGR_IsBatteryOperationOn    PowerApp_IsBatteryOperationOn
-    #define SWC_PWR_MGR_IsOutputEnabled         PowerApp_IsOutputEnabled
-    #define SWC_PWR_MGR_GetState                PowerApp_GetState
-    #define SWC_PWR_MGR_GetContext              PowerApp_GetContext
-
-#endif /* Standalone external interface aliases. */
 
 /*******************************************************************************
     6. PUBLIC TYPEDEFS AND STRUCTURES
@@ -68,8 +53,6 @@
 /*******************************************************************************
     8. PUBLIC FUNCTION PROTOTYPES
 *******************************************************************************/
-#if ((PRJ_MOBILGENE_ENABLE == 1U) || \
-     defined(SWC_PWR_MGR_IMPLEMENTATION))
 
     /** Reports reception of an LCAN message to the power application. */
     Std_ReturnType SWC_PWR_MGR_NotifyCanRx(void);
@@ -98,6 +81,5 @@
     /** Returns read-only access to the power application context. */
     const Power_ContextType * SWC_PWR_MGR_GetContext(void);
 
-#endif /* Target or implementation declarations. */
 
 #endif /* SWC_PWR_MGR_H */

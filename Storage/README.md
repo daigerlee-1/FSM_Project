@@ -32,6 +32,7 @@ AUTOSAR NvM
 | `nvm_app.c` | Read/Write/Erase 비동기 FSM과 요청 버퍼 관리 |
 | `drv_nvm.h` | 논리 블록 ID, 블록 길이 및 Driver API 선언 |
 | `drv_nvm.c` | 논리 블록을 생성된 AUTOSAR NvM RTE 서비스에 연결 |
+| `drv_nvm_pc.c` | PC 전용 RAM 저장소 대역. main에서는 플랫폼 조건으로 선택 |
 | `SWC_NVM_MGR.c` | AUTOSAR 10ms runnable과 NvM JobFinished callback 제공 |
 
 `SWC_NVM_MGR.c`의 `RE_NVM_MGR_10ms_Task()`는 처음 호출될 때

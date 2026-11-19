@@ -26,11 +26,7 @@
 *******************************************************************************/
 /** Enables target SecureFlash IVD calculation. */
 #ifndef PRJ_IVD_CALCULATION_ENABLE
-    #if (PRJ_MOBILGENE_ENABLE == 1U)
     #define PRJ_IVD_CALCULATION_ENABLE (1U)
-    #else
-    #define PRJ_IVD_CALCULATION_ENABLE (0U)
-    #endif
 #endif
 
 /** First byte included in IVD signature section 1. */

@@ -1,0 +1,15 @@
+{
+  "source_branch": "main",
+  "source_commit": "a1d7f121ee6bfb44d25eb01e3c12555582c0ad05",
+  "platform": "mobilgene",
+  "excluded_files": [
+    "FSM_Core/tests/README.md",
+    "FSM_Core/tests/run_tests.ps1",
+    "FSM_Core/tests/support/prj_typedefs.h",
+    "FSM_Core/tests/test_fsm_config_compile.c",
+    "FSM_Core/tests/test_fsm_reentry.c",
+    "Storage/drv_nvm_pc.c",
+    "Storage/tests/run_tests.ps1",
+    "Storage/tests/test_nvm_pc.c"
+  ]
+}

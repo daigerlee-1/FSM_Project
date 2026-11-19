@@ -37,24 +37,8 @@
 *******************************************************************************/
 #include "prj_defs.h"
 
-#if (PRJ_MOBILGENE_ENABLE == 1U)
 #include <Platform_Types.h>
 #include <Std_Types.h>
-#else
-#include <stdint.h>
-
-/*******************************************************************************
-    5. PUBLIC TYPEDEFS
-*******************************************************************************/
-typedef int8_t  sint8;
-typedef int16_t sint16;
-typedef int32_t sint32;
-typedef uint8_t uint8;
-typedef uint16_t uint16;
-typedef uint32_t uint32;
-typedef uint8 boolean;
-typedef uint8 Std_ReturnType;
-#endif
 
 typedef sint8  s8;
 typedef sint16 s16;

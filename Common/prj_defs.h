@@ -53,30 +53,16 @@
 /**
  * \brief Selects the target software environment.
  *
- * Set to 1U for the Mobilgene/AUTOSAR target or 0U for a standalone PC build.
- * The build system may override this default definition.
+ * This snapshot contains only the Mobilgene/AUTOSAR target.
  */
-#ifndef PRJ_MOBILGENE_ENABLE
-#define PRJ_MOBILGENE_ENABLE (1U)
-#endif
 
 /**
  * \brief Identifies the host operating system for standalone builds.
  *
  * Both platform macros are 0U for Mobilgene/AUTOSAR target builds.
  */
-#if (PRJ_MOBILGENE_ENABLE == 0U)
-    #if defined(_WIN32)
-    #define PLATFORM_WINDOWS (1U)
-    #define PLATFORM_LINUX   (0U)
-    #else
-    #define PLATFORM_WINDOWS (0U)
-    #define PLATFORM_LINUX   (1U)
-    #endif
-#else
     #define PLATFORM_WINDOWS (0U)
     #define PLATFORM_LINUX   (0U)
-#endif
 
 
 /**
@@ -209,10 +195,6 @@
     6. CONFIGURATION VALIDATION
 *******************************************************************************/
 /** Reject unsupported binary configuration values at preprocessing time. */
-#if ((PRJ_MOBILGENE_ENABLE != 0U) && \
-     (PRJ_MOBILGENE_ENABLE != 1U))
-    #error "PRJ_MOBILGENE_ENABLE must be 0U or 1U"
-#endif
 
 #if ((VEHICLE_JX2_PRJ != 0U) && (VEHICLE_JX2_PRJ != 1U))
     #error "VEHICLE_JX2_PRJ must be 0U or 1U"

@@ -27,7 +27,7 @@ AUTOSAR 생성 헤더와 외부 `user_*` 정의가 현재 저장소에 없어 �
 | STORAGE-W001 | 높음 | 상태 조회 실패 후 Reset 시 진행 중인 작업 버퍼 재사용 | mock 작업 진행 중 소스 덮어쓰기 재현 |
 | STORAGE-W002 | 높음 | 신규 FSM과 기존 직접 NvM 요청 경로 병행 | `OLD_NVM_M` 활성화 및 runnable 경로 확인 |
 | STORAGE-W003 | 높음 | 기존 쓰기 요청 유실 및 성공 오판정 | 요청 플래그·반환값·callback 처리 코드 확인 |
-| STORAGE-W004 | 높음 | standalone RAM 드라이버 구현 누락 | 미선언 배열로 컴파일 실패 재현 |
+| STORAGE-W004 | 높음 | standalone RAM 드라이버 구현 누락 | 2026-11-19 조치: PC 드라이버 추가 및 회귀 테스트 통과 |
 | STORAGE-W005 | 중간·상위 비트 사용 시 | 작업 비트맵 해제 시 상위 8비트 손실 | 축소 마스크 확인. 외부 비트 정의 미확인 |
 | STORAGE-W006 | 중간 | PENDING 지속 시 전체 후속 요청 무기한 거부 | 모의 100초 후 WRITING 유지 확인 |
 | STORAGE-W007 | 중간 | 잘못된 블록 ID와 길이 0 요청 수락 | BLOCK_MAX / 길이 0으로 재현 |
@@ -102,6 +102,11 @@ NotiInfo 경로는 접수 반환값에 따른 재시도가 있으므로 다른 �
 - PENDING, 접수 거부, 완료 실패 및 복구 시 요청/작업 플래그를 검증합니다.
 
 ## 6. STORAGE-W004: standalone 드라이버 구현 누락
+
+조치 기록(2026-11-19): main에 `drv_nvm_pc.c`를 추가하고 기존 `drv_nvm.c`를
+타깃 전용 조건으로 분리했습니다. PC 드라이버의 전체 블록 Read/Write/Erase,
+잘못된 인자 거부 및 NvmApp 연동 회귀 테스트가 엄격 경고 빌드를 통과했습니다.
+아래는 수정 전 검토 기록입니다. 실제 Flash 동작 검증을 의미하지 않습니다.
 
 위치: [drv_nvm.c](drv_nvm.c)의 `DrvNvm_Init()` 및 Read/Write/Erase/상태 조회.
 

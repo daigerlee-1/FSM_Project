@@ -54,14 +54,9 @@
                PRJ_IVD_SECTION2_START_ADDRESS) + 1U))
 
 #if (PRJ_IVD_CALCULATION_ENABLE == 1U)
-    #if (PRJ_MOBILGENE_ENABLE == 1U)
         /* PRQA S 0306 1 -- Linker flash addresses are target pointers. */
         #define CCP_IVD_ADDRESS_TO_POINTER(address) \
             ((const uint8 *)(address))
-    #else
-        #define CCP_IVD_ADDRESS_TO_POINTER(address) \
-            ((const uint8 *)(uintptr_t)(address))
-    #endif
 #endif
 
 /*******************************************************************************

@@ -37,10 +37,8 @@
 *******************************************************************************/
 #include "knob_led_drv.h"
 
-#if (PRJ_MOBILGENE_ENABLE == 1U)
 #include "Rte_SWC_KnobLed.h"
 #include "cdd_i2c.h"
-#endif
 
 /*******************************************************************************
     5. PRIVATE DEFINITIONS AND MACROS
@@ -70,7 +68,6 @@
 /*******************************************************************************
     10. PUBLIC FUNCTIONS
 *******************************************************************************/
-#if (PRJ_MOBILGENE_ENABLE == 1U)
 /** \brief Reads the E52248 DIAG0 input through the AUTOSAR RTE. */
 uint8 GpioGet_E52248_Diag0(void)
 {
@@ -161,74 +158,6 @@ void I2C_E52248_WriteData(uint8 slave_addr, const uint8 *data, uint8 len, uint8 
     (void)Rte_Call_R_I2C_CS_WriteData_WriteData(SCB7_I2C, data, len, slave_addr, for_read);
 #endif
 }
-#else
-/** \brief Returns the deterministic standalone DIAG0 input level. */
-uint8 GpioGet_E52248_Diag0(void)
-{
-    return STD_OFF;
-}
-
-/** \brief Returns the deterministic standalone DIAG1 input level. */
-uint8 GpioGet_E52248_Diag1(void)
-{
-    return STD_OFF;
-}
-
-/** \brief Accepts a supply-enable request in the standalone build. */
-void GpioSet_E52248_VccEnable(uint8 vLevel)
-{
-    (void)vLevel;
-}
-
-/** \brief Accepts an output-enable request in the standalone build. */
-void GpioSet_E52248_OutputEnable(uint8 vLevel)
-{
-    (void)vLevel;
-}
-
-/** \brief Accepts an OTP programming request in the standalone build. */
-void GpioSet_E52248_OtpProg(uint8 vLevel)
-{
-    (void)vLevel;
-}
-
-/** \brief Accepts a reset request in the standalone build. */
-void GpioSet_E52248_nReset(uint8 vLevel)
-{
-    (void)vLevel;
-}
-
-/** \brief Provides the standalone I2C initialization stub. */
-void I2C_E52248_Init(void)
-{
-    /* No hardware initialization is required for the standalone PC build. */
-}
-
-/** \brief Provides deterministic zero-filled standalone receive data. */
-void I2C_E52248_ReadData(uint8 slave_addr, uint8 *data, uint8 len)
-{
-    uint8 index;
-
-    (void)slave_addr;
-
-    if (data != NULL_PTR)
-    {
-        for (index = (uint8)0U; index < len; index++)
-        {
-            data[index] = (uint8)0U;
-        }
-    }
-}
-
-/** \brief Accepts an I2C write request in the standalone build. */
-void I2C_E52248_WriteData(uint8 slave_addr, const uint8 *data, uint8 len, uint8 for_read)
-{
-    (void)slave_addr;
-    (void)data;
-    (void)len;
-    (void)for_read;
-}
-#endif
 
 /*******************************************************************************
     11. PRIVATE FUNCTIONS

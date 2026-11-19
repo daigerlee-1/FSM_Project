@@ -33,6 +33,7 @@
 /*******************************************************************************
     4. HEADER FILES
 *******************************************************************************/
+#include "prj_defs.h"
 #include "Rte_SWC_NVM_MGR.h"
 
 #include "drv_nvm.h"
@@ -79,27 +80,7 @@ static DrvNvm_RequestResultType DrvNvm_ConvertRequestResult(
  */
 void DrvNvm_Init(void)
 {
-#if (PRJ_MOBILGENE_ENABLE == 0U)
-    uint16 blockIndex;
-    uint16 byteIndex;
-
-    for (blockIndex = (uint16)0U;
-         blockIndex < (uint16)DRV_NVM_BLOCK_MAX;
-         blockIndex++)
-    {
-        for (byteIndex = (uint16)0U;
-             byteIndex < DRV_NVM_MAX_BLOCK_LENGTH;
-             byteIndex++)
-        {
-            DrvNvm_Block[blockIndex][byteIndex] = (uint8)0U;
-        }
-
-        DrvNvm_BlockValid[blockIndex] = FALSE;
-        DrvNvm_BlockResult[blockIndex] = DRV_NVM_REQUEST_FAILED;
-    }
-#else
     /* AUTOSAR NvM and its configured RAM blocks are initialized by BSW. */
-#endif
 }
 
 /** \brief Returns the configured size for the selected logical NvM block. */
@@ -213,6 +194,7 @@ Std_ReturnType DrvNvm_Read(
 
     return result;
 }
+
 
 /** \brief Starts a block write through RTE or the standalone RAM substitute. */
 Std_ReturnType DrvNvm_Write(

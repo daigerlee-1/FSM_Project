@@ -38,21 +38,13 @@
 *******************************************************************************/
 #include "fsm_timer.h"
 
-#if (PRJ_MOBILGENE_ENABLE == 1U)
-#include <Os.h>
-#endif
 
 /*******************************************************************************
     5. PRIVATE DEFINITIONS AND MACROS
 *******************************************************************************/
 /** Protects task-side timer access from the 1 ms GPT interrupt. */
-#if (PRJ_MOBILGENE_ENABLE == 1U)
-#define FSM_TIMER_ENTER_CRITICAL() SuspendAllInterrupts()
-#define FSM_TIMER_EXIT_CRITICAL()  ResumeAllInterrupts()
-#else
 #define FSM_TIMER_ENTER_CRITICAL() ((void)0)
 #define FSM_TIMER_EXIT_CRITICAL()  ((void)0)
-#endif
 
 /*******************************************************************************
     6. PRIVATE TYPEDEFS AND STRUCTURES

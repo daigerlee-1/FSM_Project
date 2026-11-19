@@ -1,0 +1,24 @@
+{
+  "source_branch": "main",
+  "source_commit": "a1d7f121ee6bfb44d25eb01e3c12555582c0ad05",
+  "platform": "pc",
+  "excluded_files": [
+    "Comm/SWC_DCM.c",
+    "Comm/SWC_IPdu.c",
+    "Comm/SWC_LCAN.c",
+    "Comm/lcan_input_rte.c",
+    "Comm/lcan_input_rte.h",
+    "Comm/lcan_version.c",
+    "Knob/Button/SWC_KnobButton.c",
+    "Knob/Led/SWC_KnobLed.c",
+    "Knob/Wheel/SWC_KnobWheel.c",
+    "Main/SWC_CCP_Main.c",
+    "Power/SWC_PDC.c",
+    "Power/SWC_PWR_MGR.c",
+    "Storage/App_NvM_RamBlock.c",
+    "Storage/App_NvM_RamBlock.h",
+    "Storage/SWC_NVM_MGR.c",
+    "Storage/SWC_NvM.h",
+    "Storage/drv_nvm.c"
+  ]
+}
